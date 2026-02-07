@@ -98,8 +98,7 @@ def start(
     register_mcp_server(project_root)
     console.print("[green]✓[/green] MCP server registered")
 
-    # Write session ID and mark as running
-    daemon_state.write_pid()
+    # Write session state (marks session as active)
     daemon_state.write_state({"session_id": session.id})
 
     # Normalize objective for display (collapse newlines)
@@ -165,7 +164,6 @@ def stop() -> None:
 
     # Cleanup
     remove_claude_md_governance(project_root)
-    daemon_state.remove_pid()
     daemon_state.remove_state()
 
     console.print(f"[green]✓[/green] Session {session_id[:8]}... stopped")
@@ -262,7 +260,6 @@ def resume(
     # Inject CLAUDE.md with resume context
     inject_claude_md_governance(project_root, new_session.id)
     register_mcp_server(project_root)
-    daemon_state.write_pid()
     daemon_state.write_state({"session_id": new_session.id})
 
     console.print(f"[green]✓[/green] New session [bold]{new_session.id[:8]}...[/bold] created")

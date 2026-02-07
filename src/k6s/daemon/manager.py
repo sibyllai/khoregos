@@ -6,7 +6,6 @@ managing the MCP server, filesystem watcher, and event bus.
 
 import asyncio
 import json
-import os
 import signal
 import sys
 from pathlib import Path
@@ -24,52 +23,34 @@ from k6s.watcher.fs import FileChangeEvent, FilesystemWatcher
 
 
 class DaemonState:
-    """Persistent daemon state stored in .khoregos/"""
+    """Persistent session state stored in .khoregos/
+
+    Session liveness is determined by the presence of the state file,
+    not by PID tracking. The `k6s team start` command is fire-and-forget
+    (it sets up governance and exits), so there is no long-running daemon
+    process whose PID could be monitored.
+    """
 
     def __init__(self, khoregos_dir: Path):
         self.khoregos_dir = khoregos_dir
-        self.pid_file = khoregos_dir / "daemon.pid"
         self.state_file = khoregos_dir / "daemon.state"
 
-    def write_pid(self) -> None:
-        """Write the current process PID to file."""
-        self.khoregos_dir.mkdir(parents=True, exist_ok=True)
-        self.pid_file.write_text(str(os.getpid()))
-
-    def read_pid(self) -> int | None:
-        """Read the daemon PID from file."""
-        if not self.pid_file.exists():
-            return None
-        try:
-            return int(self.pid_file.read_text().strip())
-        except (ValueError, OSError):
-            return None
-
-    def remove_pid(self) -> None:
-        """Remove the PID file."""
-        if self.pid_file.exists():
-            self.pid_file.unlink()
-
     def is_running(self) -> bool:
-        """Check if a daemon is currently running."""
-        pid = self.read_pid()
-        if pid is None:
-            return False
-        try:
-            os.kill(pid, 0)  # Check if process exists
-            return True
-        except OSError:
-            # Process doesn't exist, clean up stale PID file
-            self.remove_pid()
-            return False
+        """Check if a governance session is currently active.
+
+        Uses state file existence — not PID liveness — because
+        `k6s team start` is a setup command that exits after
+        configuring governance, so no process stays alive to track.
+        """
+        return self.state_file.exists()
 
     def write_state(self, state: dict[str, Any]) -> None:
-        """Write daemon state to file."""
+        """Write session state to file, marking the session as active."""
         self.khoregos_dir.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(json.dumps(state, indent=2))
 
     def read_state(self) -> dict[str, Any]:
-        """Read daemon state from file."""
+        """Read session state from file."""
         if not self.state_file.exists():
             return {}
         try:
@@ -78,7 +59,7 @@ class DaemonState:
             return {}
 
     def remove_state(self) -> None:
-        """Remove the state file."""
+        """Remove the state file, marking the session as inactive."""
         if self.state_file.exists():
             self.state_file.unlink()
 
@@ -125,9 +106,6 @@ class K6sDaemon:
         """Start the daemon and all components."""
         if self.daemon_state.is_running():
             raise RuntimeError("Daemon is already running")
-
-        # Write PID file
-        self.daemon_state.write_pid()
 
         # Initialize database
         self.db = await get_database(self.project_root)
@@ -204,8 +182,7 @@ class K6sDaemon:
         if self.event_bus:
             await self.event_bus.stop()
 
-        # Clean up state files
-        self.daemon_state.remove_pid()
+        # Clean up state file
         self.daemon_state.remove_state()
 
         # Signal shutdown complete
