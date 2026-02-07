@@ -86,6 +86,12 @@ def list_sessions(
     console.print(table)
 
 
+@app.command(name="latest")
+def latest_session() -> None:
+    """Show the most recent session (shortcut for `session show latest`)."""
+    show_session("latest")
+
+
 @app.command(name="show")
 def show_session(
     session_id: str = typer.Argument(..., help="Session ID (or prefix). Use 'latest' for most recent."),
