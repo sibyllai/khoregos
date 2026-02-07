@@ -8,6 +8,7 @@ from rich.console import Console
 
 from k6s import __version__
 from k6s.cli.audit import app as audit_app
+from k6s.cli.hook import app as hook_app
 from k6s.cli.session import app as session_app
 from k6s.cli.team import app as team_app
 from k6s.models.config import generate_default_config
@@ -24,6 +25,7 @@ console = Console()
 app.add_typer(team_app, name="team", help="Manage agent team sessions")
 app.add_typer(audit_app, name="audit", help="View audit trail")
 app.add_typer(session_app, name="session", help="Manage sessions")
+app.add_typer(hook_app, name="hook", help="Claude Code hook handlers (internal)")
 
 
 @app.command()

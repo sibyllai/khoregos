@@ -57,6 +57,9 @@ class EventType(str, Enum):
     BUDGET_WARNING = "budget_warning"
     BUDGET_EXCEEDED = "budget_exceeded"
 
+    # Tool use (captured via Claude Code hooks)
+    TOOL_USE = "tool_use"
+
     # Generic
     LOG = "log"
     SYSTEM = "system"

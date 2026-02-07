@@ -320,18 +320,9 @@ def remove_claude_md_governance(project_root: Path) -> None:
 
 def register_mcp_server(project_root: Path) -> None:
     """Register the K6s MCP server in Claude Code settings."""
-    settings_dir = project_root / ".claude"
-    settings_dir.mkdir(exist_ok=True)
-    settings_file = settings_dir / "settings.json"
+    settings_file = _load_claude_settings(project_root)
+    settings = _read_settings(settings_file)
 
-    settings: dict[str, Any] = {}
-    if settings_file.exists():
-        try:
-            settings = json.loads(settings_file.read_text())
-        except json.JSONDecodeError:
-            pass
-
-    # Add/update MCP server configuration
     if "mcpServers" not in settings:
         settings["mcpServers"] = {}
 
@@ -357,3 +348,99 @@ def unregister_mcp_server(project_root: Path) -> None:
     if "mcpServers" in settings and "khoregos" in settings["mcpServers"]:
         del settings["mcpServers"]["khoregos"]
         settings_file.write_text(json.dumps(settings, indent=2))
+
+
+def register_hooks(project_root: Path) -> None:
+    """Register Claude Code hooks for non-cooperative audit logging.
+
+    These hooks fire on every tool call regardless of whether agents
+    voluntarily use k6s MCP tools, providing guaranteed audit coverage.
+    """
+    settings_file = _load_claude_settings(project_root)
+    settings = _read_settings(settings_file)
+
+    settings["hooks"] = {
+        "PostToolUse": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "k6s hook post-tool-use",
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
+        "SubagentStart": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "k6s hook subagent-start",
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
+        "SubagentStop": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "k6s hook subagent-stop",
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
+        "Stop": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "k6s hook session-stop",
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
+    }
+
+    settings_file.write_text(json.dumps(settings, indent=2))
+
+
+def unregister_hooks(project_root: Path) -> None:
+    """Remove Claude Code hooks from project settings."""
+    settings_file = project_root / ".claude" / "settings.json"
+    if not settings_file.exists():
+        return
+
+    try:
+        settings = json.loads(settings_file.read_text())
+    except json.JSONDecodeError:
+        return
+
+    if "hooks" in settings:
+        del settings["hooks"]
+        settings_file.write_text(json.dumps(settings, indent=2))
+
+
+def _load_claude_settings(project_root: Path) -> Path:
+    """Ensure .claude/ directory exists and return settings.json path."""
+    settings_dir = project_root / ".claude"
+    settings_dir.mkdir(exist_ok=True)
+    return settings_dir / "settings.json"
+
+
+def _read_settings(settings_file: Path) -> dict[str, Any]:
+    """Read settings.json, returning empty dict on missing/corrupt file."""
+    if settings_file.exists():
+        try:
+            return json.loads(settings_file.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {}

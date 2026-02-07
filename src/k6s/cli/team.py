@@ -12,8 +12,10 @@ from rich.table import Table
 from k6s.daemon.manager import (
     DaemonState,
     inject_claude_md_governance,
+    register_hooks,
     register_mcp_server,
     remove_claude_md_governance,
+    unregister_hooks,
 )
 from k6s.models.config import K6sConfig
 from k6s.models.session import Session, SessionState
@@ -94,9 +96,10 @@ def start(
     inject_claude_md_governance(project_root, session.id)
     console.print("[green]✓[/green] CLAUDE.md updated with governance rules")
 
-    # Register MCP server
+    # Register MCP server and hooks
     register_mcp_server(project_root)
-    console.print("[green]✓[/green] MCP server registered")
+    register_hooks(project_root)
+    console.print("[green]✓[/green] MCP server and hooks registered")
 
     # Write session state (marks session as active)
     daemon_state.write_state({"session_id": session.id})
@@ -164,10 +167,11 @@ def stop() -> None:
 
     # Cleanup
     remove_claude_md_governance(project_root)
+    unregister_hooks(project_root)
     daemon_state.remove_state()
 
     console.print(f"[green]✓[/green] Session {session_id[:8]}... stopped")
-    console.print("[green]✓[/green] Governance rules removed from CLAUDE.md")
+    console.print("[green]✓[/green] Governance removed (CLAUDE.md, hooks)")
 
 
 @app.command()
@@ -260,6 +264,7 @@ def resume(
     # Inject CLAUDE.md with resume context
     inject_claude_md_governance(project_root, new_session.id)
     register_mcp_server(project_root)
+    register_hooks(project_root)
     daemon_state.write_state({"session_id": new_session.id})
 
     console.print(f"[green]✓[/green] New session [bold]{new_session.id[:8]}...[/bold] created")
