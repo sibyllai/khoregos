@@ -88,7 +88,7 @@ def list_sessions(
 
 @app.command(name="show")
 def show_session(
-    session_id: str = typer.Argument(..., help="Session ID (or prefix)"),
+    session_id: str = typer.Argument(..., help="Session ID (or prefix). Use 'latest' for most recent."),
 ) -> None:
     """Show detailed session information."""
     project_root = Path.cwd()
@@ -107,13 +107,16 @@ def show_session(
 
             state_manager = StateManager(db, project_root)
 
-            # Find session by prefix
+            # Find session: "latest" = most recent, otherwise match by ID or prefix
             sessions = await state_manager.list_sessions(limit=100)
             session = None
-            for s in sessions:
-                if s.id.startswith(session_id) or s.id == session_id:
-                    session = s
-                    break
+            if session_id.lower() == "latest" and sessions:
+                session = sessions[0]
+            else:
+                for s in sessions:
+                    if s.id.startswith(session_id) or s.id == session_id:
+                        session = s
+                        break
 
             if not session:
                 return None
@@ -188,7 +191,7 @@ def show_session(
 
 @app.command()
 def context(
-    session_id: str = typer.Argument(..., help="Session ID (or prefix)"),
+    session_id: str = typer.Argument(..., help="Session ID (or prefix). Use 'latest' for most recent."),
     key: str = typer.Option(None, "--key", "-k", help="Specific context key to show"),
     format: str = typer.Option("text", "--format", "-f", help="Output format: text, json"),
 ) -> None:
@@ -207,13 +210,16 @@ def context(
             from k6s.engine.state import StateManager
             state_manager = StateManager(db, project_root)
 
-            # Find session by prefix
+            # Find session: "latest" = most recent, otherwise match by ID or prefix
             sessions = await state_manager.list_sessions(limit=100)
             session = None
-            for s in sessions:
-                if s.id.startswith(session_id) or s.id == session_id:
-                    session = s
-                    break
+            if session_id.lower() == "latest" and sessions:
+                session = sessions[0]
+            else:
+                for s in sessions:
+                    if s.id.startswith(session_id) or s.id == session_id:
+                        session = s
+                        break
 
             if not session:
                 return []
