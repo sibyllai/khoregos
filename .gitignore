@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.db
+*.db-shm
+*.db-wal
+.khoregos/
+.venv/
+.env

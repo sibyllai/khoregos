@@ -1,0 +1,113 @@
+# k6s.yaml — Khoregos Project Governance Configuration
+# This file configures boundaries, gates, and observability for your project.
+# Copy to k6s.yaml and customize for your needs.
+
+version: "1"
+
+project:
+  name: "my-project"
+  description: "Project governed by Khoregos"
+
+# Session defaults
+session:
+  default_budget_usd: 50.00          # Per-session budget limit
+  context_retention_days: 90          # How long to keep context
+  audit_retention_days: 365           # How long to keep audit logs
+
+# Agent boundary definitions
+# Boundaries restrict which files agents can modify
+boundaries:
+  # Frontend agents can only modify frontend code
+  - pattern: "frontend-*"
+    allowed_paths:
+      - "src/frontend/**"
+      - "src/shared/**"
+      - "tests/frontend/**"
+      - "public/**"
+    forbidden_paths:
+      - ".env*"
+      - "src/backend/auth/**"
+    enforcement: advisory              # advisory | strict
+    max_cost_per_hour: 5.00
+
+  # Backend agents
+  - pattern: "backend-*"
+    allowed_paths:
+      - "src/backend/**"
+      - "src/shared/**"
+      - "tests/backend/**"
+    forbidden_paths:
+      - ".env*"
+      - "infrastructure/**"
+    enforcement: advisory
+
+  # Default for all other agents
+  - pattern: "*"
+    forbidden_paths:
+      - ".env*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/credentials*"
+      - "**/secrets/**"
+    enforcement: advisory
+
+# Gate rules (Phase 2 - will be enabled later)
+# Gates require human approval before certain actions
+gates:
+  - id: dependency-approval
+    name: "New Dependency Approval"
+    trigger:
+      file_patterns:
+        - "package.json"
+        - "package-lock.json"
+        - "yarn.lock"
+        - "requirements.txt"
+        - "Pipfile"
+        - "pyproject.toml"
+        - "go.mod"
+        - "Cargo.toml"
+        - "**/pom.xml"
+    approval_mode: manual
+    timeout_seconds: 1800
+    notify: ["terminal"]
+
+  - id: security-files
+    name: "Security File Changes"
+    trigger:
+      file_patterns:
+        - ".env*"
+        - "**/auth/**"
+        - "**/security/**"
+        - "**/*.pem"
+        - "**/*.key"
+    approval_mode: manual
+    notify: ["terminal"]
+
+  - id: cost-threshold
+    name: "Cost Budget Alert"
+    trigger:
+      cost_threshold: 25.00            # Alert at 50% of default budget
+    approval_mode: manual
+    notify: ["terminal"]
+
+# Observability configuration (Phase 3)
+observability:
+  prometheus:
+    enabled: false
+    port: 9090
+  opentelemetry:
+    enabled: false
+    endpoint: "http://localhost:4317"
+  webhooks: []
+    # Example webhook configuration:
+    # - url: "https://hooks.slack.com/services/..."
+    #   events: ["gate.triggered", "session.completed"]
+    #   secret: "${K6S_WEBHOOK_SECRET}"
+
+# Plugin configuration (Phase 4)
+plugins: []
+  # Example plugin configuration:
+  # - name: "stegano"
+  #   module: "k6s_plugin_stegano"
+  #   config:
+  #     api_url: "https://api.stegano.ai"
