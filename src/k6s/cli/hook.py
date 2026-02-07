@@ -175,7 +175,7 @@ def subagent_stop() -> None:
 
 @app.command(name="session-stop")
 def session_stop() -> None:
-    """Handle Stop hook — log session end."""
+    """Handle Stop hook — log session end and mark session completed."""
     project_root = Path.cwd()
     session_id = _get_session_id(project_root)
     if not session_id:
@@ -192,6 +192,24 @@ def session_stop() -> None:
             "session_id": data.get("session_id") if data else None,
         },
     )
+
+    # Mark session as completed in the database
+    async def _complete_session() -> None:
+        from k6s.engine.state import StateManager
+
+        db = Database(project_root / ".khoregos" / "k6s.db")
+        await db.connect()
+        try:
+            state_manager = StateManager(db, project_root)
+            await state_manager.mark_session_completed(session_id)
+        finally:
+            await db.close()
+
+    asyncio.run(_complete_session())
+
+    # Remove daemon state file so `is_running()` returns False
+    daemon_state = DaemonState(project_root / ".khoregos")
+    daemon_state.remove_state()
 
 
 def _truncate(obj: object, max_len: int = 2000) -> object:
