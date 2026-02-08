@@ -1,6 +1,7 @@
 """SQLite database connection and management."""
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -21,7 +22,9 @@ class Database:
     async def connect(self) -> None:
         """Initialize database connection and run migrations."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.db_path.parent, 0o700)
         self._connection = await aiosqlite.connect(self.db_path)
+        os.chmod(self.db_path, 0o600)
         self._connection.row_factory = aiosqlite.Row
 
         # Configure SQLite for performance
