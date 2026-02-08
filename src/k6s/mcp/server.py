@@ -30,6 +30,22 @@ from k6s.store.db import Database
 class K6sServer:
     """MCP server providing governance tools for agents."""
 
+    # Size limits for MCP tool inputs
+    INPUT_LIMITS = {
+        "action": 500,
+        "key": 500,
+        "path": 1000,
+        "agent_name": 200,
+        "task_id": 200,
+        "status": 100,
+        "progress": 2000,
+        "event_type": 100,
+        "value_bytes": 65536,  # 64KB for context values
+        "details_bytes": 32768,  # 32KB for details objects
+        "files_max": 100,
+        "duration_seconds_max": 3600,
+    }
+
     def __init__(
         self,
         db: Database,
@@ -231,6 +247,11 @@ class K6sServer:
         @self.server.call_tool()
         async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             try:
+                # Validate input sizes before processing
+                validation_error = self._validate_input(arguments)
+                if validation_error:
+                    return [TextContent(type="text", text=json.dumps({"error": validation_error}))]
+
                 if name == "k6s_log":
                     return await self._handle_log(arguments)
                 elif name == "k6s_save_context":
@@ -298,6 +319,34 @@ class K6sServer:
                 )
 
             return json.dumps({"error": f"Unknown resource: {uri}"})
+
+    def _validate_input(self, args: dict[str, Any]) -> str | None:
+        """Validate MCP tool input sizes. Returns error message or None if valid."""
+        for key, value in args.items():
+            if isinstance(value, str):
+                limit = self.INPUT_LIMITS.get(key)
+                if limit and len(value) > limit:
+                    return f"Input '{key}' exceeds maximum length of {limit} characters"
+
+            if key == "details" and isinstance(value, dict):
+                serialized = json.dumps(value)
+                if len(serialized) > self.INPUT_LIMITS["details_bytes"]:
+                    return f"'details' exceeds maximum size of {self.INPUT_LIMITS['details_bytes']} bytes"
+
+            if key == "value":
+                serialized = json.dumps(value) if not isinstance(value, str) else value
+                if len(serialized) > self.INPUT_LIMITS["value_bytes"]:
+                    return f"'value' exceeds maximum size of {self.INPUT_LIMITS['value_bytes']} bytes"
+
+            if key == "files" and isinstance(value, list):
+                if len(value) > self.INPUT_LIMITS["files_max"]:
+                    return f"'files' list exceeds maximum of {self.INPUT_LIMITS['files_max']} entries"
+
+            if key == "duration_seconds" and isinstance(value, (int, float)):
+                if value <= 0 or value > self.INPUT_LIMITS["duration_seconds_max"]:
+                    return f"'duration_seconds' must be between 1 and {self.INPUT_LIMITS['duration_seconds_max']}"
+
+        return None
 
     async def _handle_log(self, args: dict[str, Any]) -> list[TextContent]:
         """Handle k6s_log tool call."""
