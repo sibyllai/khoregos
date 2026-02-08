@@ -60,8 +60,7 @@ class BoundaryEnforcer:
         """
         boundary = self.get_boundary_for_agent(agent_name)
         if boundary is None:
-            # No boundary configured, allow by default
-            return True, None
+            return False, f"No boundary configured for agent '{agent_name}'; denied by default"
 
         # Resolve symlinks and normalize '..' to get the real path,
         # then verify it still falls under the project root.
@@ -170,7 +169,7 @@ class BoundaryEnforcer:
                 "has_boundary": False,
                 "allowed_paths": [],
                 "forbidden_paths": [],
-                "enforcement": "none",
+                "enforcement": "deny",
             }
 
         return {
