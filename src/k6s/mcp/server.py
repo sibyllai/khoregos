@@ -426,6 +426,23 @@ class K6sServer:
             )
             agent_id = agent.id
 
+        # Enforce boundary check before allowing lock acquisition
+        allowed, reason = self.boundary_enforcer.check_path_allowed(path, agent_name)
+        if not allowed:
+            await self.boundary_enforcer.record_violation(
+                file_path=path,
+                agent_id=agent_id,
+                violation_type="forbidden_path",
+                enforcement_action="blocked",
+                details={"reason": reason, "operation": "lock_acquire"},
+            )
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps({"success": False, "reason": f"Boundary violation: {reason}"}),
+                )
+            ]
+
         result = await self.lock_manager.acquire(path, agent_id, duration)
 
         if result.success:
@@ -447,6 +464,23 @@ class K6sServer:
             self.session_id, agent_name
         )
         agent_id = agent.id if agent else "unknown"
+
+        # Enforce boundary check before allowing lock release
+        allowed, reason = self.boundary_enforcer.check_path_allowed(path, agent_name)
+        if not allowed:
+            await self.boundary_enforcer.record_violation(
+                file_path=path,
+                agent_id=agent_id,
+                violation_type="forbidden_path",
+                enforcement_action="blocked",
+                details={"reason": reason, "operation": "lock_release"},
+            )
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps({"success": False, "reason": f"Boundary violation: {reason}"}),
+                )
+            ]
 
         result = await self.lock_manager.release(path, agent_id)
 
