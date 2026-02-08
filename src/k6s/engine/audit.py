@@ -107,17 +107,27 @@ class AuditLogger:
                 break
 
     async def _flush(self) -> None:
-        """Flush buffered events to the database."""
+        """Flush buffered events to the database.
+
+        Copies the buffer before inserting so events are only
+        cleared after successful persistence. On failure, events
+        are re-queued to prevent silent data loss.
+        """
         async with self._lock:
             if not self._buffer:
                 return
 
-            events_to_flush = self._buffer
-            self._buffer = []
+            events_to_flush = list(self._buffer)
+            self._buffer.clear()
 
-        # Insert all events in a single transaction
-        for event in events_to_flush:
-            await self.db.insert("audit_events", event.to_db_row())
+        try:
+            for event in events_to_flush:
+                await self.db.insert("audit_events", event.to_db_row())
+        except Exception:
+            # Re-queue events that failed to persist
+            async with self._lock:
+                self._buffer = events_to_flush + self._buffer
+            raise
 
     async def get_events(
         self,
