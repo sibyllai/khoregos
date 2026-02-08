@@ -1,7 +1,7 @@
 """Boundary enforcer for agent file access control."""
 
 import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ulid import ULID
@@ -78,15 +78,18 @@ class BoundaryEnforcer:
 
         path_str = str(path)
 
-        # Check forbidden paths first (they take precedence)
+        # Check forbidden paths first (they take precedence).
+        # PurePosixPath.match() supports '**' for recursive globstar,
+        # unlike fnmatch which treats '**' as a literal.
+        pure = PurePosixPath(path_str)
         for pattern in boundary.forbidden_paths:
-            if fnmatch.fnmatch(path_str, pattern):
+            if pure.match(pattern):
                 return False, f"Path matches forbidden pattern: {pattern}"
 
         # If allowed_paths is specified, path must match at least one
         if boundary.allowed_paths:
             for pattern in boundary.allowed_paths:
-                if fnmatch.fnmatch(path_str, pattern):
+                if pure.match(pattern):
                     return True, None
             return False, f"Path does not match any allowed patterns for {agent_name}"
 
