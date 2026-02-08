@@ -63,14 +63,19 @@ class BoundaryEnforcer:
             # No boundary configured, allow by default
             return True, None
 
-        # Normalize path to be relative to project root
+        # Resolve symlinks and normalize '..' to get the real path,
+        # then verify it still falls under the project root.
+        resolved_root = self.project_root.resolve()
         path = Path(file_path)
         if path.is_absolute():
-            try:
-                path = path.relative_to(self.project_root)
-            except ValueError:
-                # Path is outside project root
-                return False, f"Path {file_path} is outside project root"
+            resolved = path.resolve()
+        else:
+            resolved = (resolved_root / path).resolve()
+
+        try:
+            path = resolved.relative_to(resolved_root)
+        except ValueError:
+            return False, f"Path {file_path} resolves outside project root"
 
         path_str = str(path)
 
