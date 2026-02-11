@@ -54,6 +54,9 @@ class FileLockManager:
     ) -> LockResult:
         """Attempt to acquire a lock on a file.
 
+        Uses BEGIN IMMEDIATE to serialize concurrent lock attempts
+        and prevent two agents from both acquiring the same lock.
+
         Args:
             path: The file path to lock.
             agent_id: The agent requesting the lock.
@@ -62,34 +65,61 @@ class FileLockManager:
         Returns:
             LockResult indicating success or failure.
         """
-        # Check for existing lock
-        existing = await self._get_lock(path)
-        if existing:
-            # Check if expired
-            if existing.is_expired:
-                await self._release_lock(path)
-            elif existing.agent_id != agent_id:
-                return LockResult(
-                    success=False,
-                    reason=f"File locked by agent {existing.agent_id}",
-                )
-            else:
-                # Same agent already has the lock, extend it
-                return await self._extend_lock(existing, duration_seconds)
+        async with self.db.transaction() as conn:
+            # BEGIN IMMEDIATE ensures exclusive write access from the start,
+            # preventing TOCTOU races between the SELECT and INSERT.
+            await conn.execute("BEGIN IMMEDIATE")
 
-        # Create new lock
-        duration = duration_seconds or self.DEFAULT_LOCK_DURATION_SECONDS
-        expires_at = datetime.utcnow() + timedelta(seconds=duration)
+            # Check for existing lock within the transaction
+            cursor = await conn.execute(
+                "SELECT * FROM file_locks WHERE path = ? AND session_id = ?",
+                (path, self.session_id),
+            )
+            row = await cursor.fetchone()
+            existing = FileLock.from_db_row(dict(row)) if row else None
 
-        lock = FileLock(
-            path=path,
-            session_id=self.session_id,
-            agent_id=agent_id,
-            expires_at=expires_at,
-        )
+            if existing:
+                if existing.is_expired:
+                    await conn.execute(
+                        "DELETE FROM file_locks WHERE path = ? AND session_id = ?",
+                        (path, self.session_id),
+                    )
+                elif existing.agent_id != agent_id:
+                    return LockResult(
+                        success=False,
+                        reason=f"File locked by agent {existing.agent_id}",
+                    )
+                else:
+                    # Same agent already has the lock, extend it
+                    duration = duration_seconds or self.DEFAULT_LOCK_DURATION_SECONDS
+                    new_expires = datetime.utcnow() + timedelta(seconds=duration)
+                    await conn.execute(
+                        "UPDATE file_locks SET expires_at = ? WHERE path = ? AND session_id = ?",
+                        (new_expires.isoformat(), path, self.session_id),
+                    )
+                    existing.expires_at = new_expires
+                    return LockResult(success=True, lock=existing)
 
-        await self.db.insert_or_replace("file_locks", lock.to_db_row())
-        return LockResult(success=True, lock=lock)
+            # Create new lock
+            duration = duration_seconds or self.DEFAULT_LOCK_DURATION_SECONDS
+            expires_at = datetime.utcnow() + timedelta(seconds=duration)
+
+            lock = FileLock(
+                path=path,
+                session_id=self.session_id,
+                agent_id=agent_id,
+                expires_at=expires_at,
+            )
+
+            data = lock.to_db_row()
+            columns = ", ".join(data.keys())
+            placeholders = ", ".join("?" for _ in data)
+            await conn.execute(
+                f"INSERT OR REPLACE INTO file_locks ({columns}) VALUES ({placeholders})",
+                tuple(data.values()),
+            )
+
+            return LockResult(success=True, lock=lock)
 
     async def release(self, path: str, agent_id: str) -> LockResult:
         """Release a lock on a file.

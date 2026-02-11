@@ -6,7 +6,7 @@ This is the safety net that catches all file modifications.
 
 import asyncio
 import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from watchdog.events import (
@@ -87,9 +87,9 @@ class K6sEventHandler(FileSystemEventHandler):
         except ValueError:
             return True  # Outside project root
 
-        rel_path_str = str(rel_path)
+        pure = PurePosixPath(str(rel_path))
         for pattern in self.ignore_patterns:
-            if fnmatch.fnmatch(rel_path_str, pattern):
+            if pure.match(pattern):
                 return True
         return False
 
@@ -312,8 +312,9 @@ class GatePatternMatcher:
 
     def matches(self, path: str) -> bool:
         """Check if a path matches any of the patterns."""
+        pure = PurePosixPath(path)
         for pattern in self.patterns:
-            if fnmatch.fnmatch(path, pattern):
+            if pure.match(pattern):
                 return True
         return False
 

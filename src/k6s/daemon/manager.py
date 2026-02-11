@@ -6,6 +6,7 @@ managing the MCP server, filesystem watcher, and event bus.
 
 import asyncio
 import json
+import os
 import signal
 import sys
 from pathlib import Path
@@ -47,7 +48,9 @@ class DaemonState:
     def write_state(self, state: dict[str, Any]) -> None:
         """Write session state to file, marking the session as active."""
         self.khoregos_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.khoregos_dir, 0o700)
         self.state_file.write_text(json.dumps(state, indent=2))
+        os.chmod(self.state_file, 0o600)
 
     def read_state(self) -> dict[str, Any]:
         """Read session state from file."""
