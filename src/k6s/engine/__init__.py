@@ -1,1 +1,0 @@
-"""Khoregos governance engine components."""

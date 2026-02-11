@@ -1,13 +1,8 @@
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
+node_modules/
 dist/
-build/
-.eggs/
 *.db
 *.db-shm
 *.db-wal
 .khoregos/
-.venv/
 .env
+.DS_Store
