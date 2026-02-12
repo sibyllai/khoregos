@@ -1,0 +1,47 @@
+{
+  "name": "khoregos",
+  "version": "0.1.0",
+  "description": "Enterprise governance layer for Claude Code Agent Teams",
+  "type": "module",
+  "bin": {
+    "k6s": "bin/k6s.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/index.ts",
+    "test": "vitest"
+  },
+  "keywords": [
+    "claude",
+    "agents",
+    "governance",
+    "audit",
+    "mcp"
+  ],
+  "author": "{sybillai}",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "better-sqlite3": "^11.8.1",
+    "chalk": "^5.4.1",
+    "chokidar": "^4.0.3",
+    "cli-table3": "^0.6.5",
+    "commander": "^13.1.0",
+    "picomatch": "^4.0.2",
+    "ulid": "^2.3.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.13.4",
+    "@types/picomatch": "^3.0.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
