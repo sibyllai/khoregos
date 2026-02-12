@@ -4,7 +4,7 @@
   "description": "Enterprise governance layer for Claude Code Agent Teams",
   "type": "module",
   "bin": {
-    "k6s": "dist/bin/k6s.js"
+    "k6s": "bin/k6s.js"
   },
   "engines": {
     "node": ">=18"
