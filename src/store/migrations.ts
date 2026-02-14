@@ -2,7 +2,7 @@
  * Database schema migrations for Khoregos.
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 type Migration = [version: number, sql: string];
 
@@ -120,6 +120,26 @@ const MIGRATIONS: Migration[] = [
         details TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_violations_session ON boundary_violations(session_id);
+    `,
+  ],
+  [
+    2,
+    `
+    -- Session: operator and environment (SOC 2 / ISO 27001 attribution)
+    ALTER TABLE sessions ADD COLUMN operator TEXT;
+    ALTER TABLE sessions ADD COLUMN hostname TEXT;
+    ALTER TABLE sessions ADD COLUMN k6s_version TEXT;
+    ALTER TABLE sessions ADD COLUMN claude_code_version TEXT;
+    ALTER TABLE sessions ADD COLUMN git_branch TEXT;
+    ALTER TABLE sessions ADD COLUMN git_sha TEXT;
+    ALTER TABLE sessions ADD COLUMN git_dirty INTEGER DEFAULT 0;
+
+    -- Audit: security severity for filtering
+    ALTER TABLE audit_events ADD COLUMN severity TEXT DEFAULT 'info';
+
+    -- Agents: Claude Code subagent session id for correlating post-tool-use events
+    ALTER TABLE agents ADD COLUMN claude_session_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_agents_claude_session ON agents(session_id, claude_session_id);
     `,
   ],
 ];

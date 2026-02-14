@@ -3,6 +3,7 @@
  */
 
 import { existsSync } from "node:fs";
+import { hostname } from "node:os";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { Command } from "commander";
@@ -16,10 +17,52 @@ import {
   removeClaudeMdGovernance,
   unregisterHooks,
 } from "../daemon/manager.js";
+import { AuditLogger } from "../engine/audit.js";
 import { loadConfig } from "../models/config.js";
 import { type Session, type SessionState } from "../models/session.js";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
+
+const K6S_VERSION = "0.1.0";
+
+function getGitContext(projectRoot: string): {
+  branch: string | null;
+  sha: string | null;
+  dirty: boolean;
+} {
+  try {
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    const status = execFileSync("git", ["status", "--porcelain"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    return {
+      branch: branch || null,
+      sha: sha || null,
+      dirty: status.length > 0,
+    };
+  } catch {
+    return { branch: null, sha: null, dirty: false };
+  }
+}
+
+function getClaudeCodeVersion(): string | null {
+  try {
+    const out = execFileSync("claude", ["--version"], {
+      encoding: "utf8",
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
 
 function withDb<T>(projectRoot: string, fn: (db: Db) => T): T {
   const db = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
@@ -64,13 +107,48 @@ export function registerTeamCommands(program: Command): void {
 
       const config = loadConfig(configFile);
 
+      const operator =
+        process.env.USER ??
+        (typeof process.getuid === "function"
+          ? String(process.getuid())
+          : null);
+      const git = getGitContext(projectRoot);
+      const claudeVersion = getClaudeCodeVersion();
+
       const session = withDb(projectRoot, (db) => {
         const sm = new StateManager(db, projectRoot);
         const s = sm.createSession({
           objective,
           configSnapshot: JSON.stringify(config),
         });
+        s.operator = operator ?? null;
+        s.hostname = hostname();
+        s.k6sVersion = K6S_VERSION;
+        s.claudeCodeVersion = claudeVersion;
+        s.gitBranch = git.branch;
+        s.gitSha = git.sha;
+        s.gitDirty = git.dirty;
+        sm.updateSession(s);
         sm.markSessionActive(s.id);
+
+        const logger = new AuditLogger(db, s.id);
+        logger.start();
+        logger.log({
+          eventType: "session_start",
+          action: "session started",
+          details: {
+            objective,
+            operator: s.operator,
+            hostname: s.hostname,
+            k6s_version: s.k6sVersion,
+            claude_code_version: s.claudeCodeVersion,
+            git_branch: s.gitBranch,
+            git_sha: s.gitSha,
+            git_dirty: s.gitDirty,
+          },
+        });
+        logger.stop();
+
         return s;
       });
 
@@ -282,7 +360,7 @@ export function registerTeamCommands(program: Command): void {
       }
 
       const table = new Table({
-        head: ["ID", "Objective", "State", "Started", "Cost"],
+        head: ["ID", "Objective", "State", "Started"],
       });
 
       const stateColor: Record<string, (s: string) => string> = {
@@ -300,7 +378,6 @@ export function registerTeamCommands(program: Command): void {
           s.objective.length > 40 ? s.objective.slice(0, 40) + "..." : s.objective,
           colorFn(s.state),
           new Date(s.startedAt).toISOString().slice(0, 16).replace("T", " "),
-          s.totalCostUsd ? `$${s.totalCostUsd.toFixed(2)}` : "-",
         ]);
       }
 

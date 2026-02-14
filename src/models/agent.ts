@@ -22,11 +22,12 @@ export const AgentSchema = z.object({
   spawnedAt: z.string().default(() => new Date().toISOString()),
   boundaryConfig: z.string().nullable().default(null),
   metadata: z.string().nullable().default(null),
+  claudeSessionId: z.string().nullable().default(null),
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
 export function agentToDbRow(a: Agent): Row {
-  return {
+  const row: Row = {
     id: a.id,
     session_id: a.sessionId,
     name: a.name,
@@ -37,6 +38,8 @@ export function agentToDbRow(a: Agent): Row {
     boundary_config: a.boundaryConfig,
     metadata: a.metadata,
   };
+  if (a.claudeSessionId != null) row.claude_session_id = a.claudeSessionId;
+  return row;
 }
 
 export function agentFromDbRow(row: Row): Agent {
@@ -50,6 +53,7 @@ export function agentFromDbRow(row: Row): Agent {
     spawnedAt: row.spawned_at as string,
     boundaryConfig: (row.boundary_config as string) ?? null,
     metadata: (row.metadata as string) ?? null,
+    claudeSessionId: (row.claude_session_id as string) ?? null,
   };
 }
 

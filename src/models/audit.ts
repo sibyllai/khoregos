@@ -25,11 +25,8 @@ export const EventType = z.enum([
   "task_create",
   "task_update",
   "task_complete",
-  // Gate events
+  // Sensitive-file audit annotation (displayed as sensitive_needs_review).
   "gate_triggered",
-  "gate_approved",
-  "gate_denied",
-  "gate_expired",
   // Boundary events
   "boundary_violation",
   "boundary_check",
@@ -40,10 +37,6 @@ export const EventType = z.enum([
   // Context events
   "context_saved",
   "context_loaded",
-  // Cost events
-  "cost_reported",
-  "budget_warning",
-  "budget_exceeded",
   // Tool use (captured via Claude Code hooks)
   "tool_use",
   // Generic
@@ -51,6 +44,9 @@ export const EventType = z.enum([
   "system",
 ]);
 export type EventType = z.infer<typeof EventType>;
+
+export const AuditSeverity = z.enum(["info", "warning", "critical"]);
+export type AuditSeverity = z.infer<typeof AuditSeverity>;
 
 export const AuditEventSchema = z.object({
   id: z.string().default(() => ulid()),
@@ -64,6 +60,7 @@ export const AuditEventSchema = z.object({
   filesAffected: z.string().nullable().default(null),
   gateId: z.string().nullable().default(null),
   hmac: z.string().nullable().default(null),
+  severity: AuditSeverity.default("info"),
 });
 export type AuditEvent = z.infer<typeof AuditEventSchema>;
 
@@ -80,6 +77,7 @@ export function auditEventToDbRow(e: AuditEvent): Row {
     files_affected: e.filesAffected,
     gate_id: e.gateId,
     hmac: e.hmac,
+    severity: e.severity,
   };
 }
 
@@ -96,6 +94,7 @@ export function auditEventFromDbRow(row: Row): AuditEvent {
     filesAffected: (row.files_affected as string) ?? null,
     gateId: (row.gate_id as string) ?? null,
     hmac: (row.hmac as string) ?? null,
+    severity: (row.severity as AuditSeverity) ?? "info",
   };
 }
 

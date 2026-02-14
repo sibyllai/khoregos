@@ -159,8 +159,6 @@ export class BoundaryEnforcer {
       allowed_paths: boundary.allowed_paths,
       forbidden_paths: boundary.forbidden_paths,
       enforcement: boundary.enforcement,
-      max_tokens_per_hour: boundary.max_tokens_per_hour,
-      max_cost_per_hour: boundary.max_cost_per_hour,
     };
   }
 }

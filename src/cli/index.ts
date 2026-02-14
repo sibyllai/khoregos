@@ -69,7 +69,7 @@ program
     console.log(chalk.bold.green(`Khoregos initialized for ${projectName}`));
     console.log();
     console.log("Next steps:");
-    console.log("  1. Edit k6s.yaml to configure boundaries and gates");
+    console.log("  1. Edit k6s.yaml to configure boundaries and audit rules");
     console.log(
       `  2. Run ${chalk.bold('k6s team start "your objective"')} to begin a session`,
     );

@@ -61,7 +61,7 @@ export function registerSessionCommands(program: Command): void {
       }
 
       const table = new Table({
-        head: ["ID", "Objective", "State", "Started", "Duration", "Cost", "Tokens"],
+        head: ["ID", "Objective", "State", "Started", "Duration"],
       });
 
       const stateColor: Record<string, (s: string) => string> = {
@@ -82,10 +82,6 @@ export function registerSessionCommands(program: Command): void {
         }
 
         const colorFn = stateColor[s.state] ?? chalk.dim;
-        const tokens =
-          s.totalInputTokens || s.totalOutputTokens
-            ? (s.totalInputTokens + s.totalOutputTokens).toLocaleString()
-            : "-";
 
         table.push([
           s.id.slice(0, 8) + "...",
@@ -93,8 +89,6 @@ export function registerSessionCommands(program: Command): void {
           colorFn(s.state),
           new Date(s.startedAt).toISOString().slice(0, 16).replace("T", " "),
           duration,
-          s.totalCostUsd ? `$${s.totalCostUsd.toFixed(2)}` : "-",
-          tokens,
         ]);
       }
 
@@ -256,9 +250,26 @@ function showSessionDetails(sessionId: string): void {
   console.log(`  ${chalk.bold("Started:")} ${new Date(session.startedAt).toISOString().slice(0, 19).replace("T", " ")}`);
   console.log(`  ${chalk.bold("Ended:")} ${session.endedAt ? new Date(session.endedAt).toISOString().slice(0, 19).replace("T", " ") : "-"}`);
   console.log(`  ${chalk.bold("Parent:")} ${session.parentSessionId ? session.parentSessionId.slice(0, 8) + "..." : "-"}`);
-  console.log(`  ${chalk.bold("Cost:")} $${session.totalCostUsd.toFixed(4)}`);
-  console.log(`  ${chalk.bold("Tokens:")} ${session.totalInputTokens.toLocaleString()} in / ${session.totalOutputTokens.toLocaleString()} out`);
   console.log(`  ${chalk.bold("Audit Events:")} ${eventCount.toLocaleString()}`);
+
+  // Operator and environment context.
+  if (session.operator || session.hostname) {
+    console.log();
+    console.log(chalk.bold("Environment:"));
+    if (session.operator) console.log(`  ${chalk.bold("Operator:")} ${session.operator}`);
+    if (session.hostname) console.log(`  ${chalk.bold("Hostname:")} ${session.hostname}`);
+    if (session.k6sVersion) console.log(`  ${chalk.bold("K6s Version:")} ${session.k6sVersion}`);
+    if (session.claudeCodeVersion) console.log(`  ${chalk.bold("Claude Code:")} ${session.claudeCodeVersion}`);
+  }
+
+  // Git context.
+  if (session.gitBranch || session.gitSha) {
+    console.log();
+    console.log(chalk.bold("Git:"));
+    if (session.gitBranch) console.log(`  ${chalk.bold("Branch:")} ${session.gitBranch}`);
+    if (session.gitSha) console.log(`  ${chalk.bold("SHA:")} ${session.gitSha}`);
+    if (session.gitDirty) console.log(`  ${chalk.bold("Dirty:")} ${chalk.yellow("yes")}`);
+  }
 
   if (agents.length) {
     console.log();

@@ -43,10 +43,14 @@ export class StateManager {
       parentSessionId: opts.parentSessionId ?? null,
       configSnapshot: opts.configSnapshot ?? null,
       contextSummary: null,
-      totalCostUsd: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
       metadata: null,
+      operator: null,
+      hostname: null,
+      k6sVersion: null,
+      claudeCodeVersion: null,
+      gitBranch: null,
+      gitSha: null,
+      gitDirty: false,
     };
     this.db.insert("sessions", sessionToDbRow(session));
     return session;
@@ -139,6 +143,7 @@ export class StateManager {
         ? JSON.stringify(opts.boundaryConfig)
         : null,
       metadata: null,
+      claudeSessionId: null,
     };
     this.db.insert("agents", agentToDbRow(agent));
     return agent;
@@ -157,6 +162,37 @@ export class StateManager {
       [sessionId, name],
     );
     return row ? agentFromDbRow(row) : null;
+  }
+
+  getAgentByClaudeSessionId(
+    sessionId: string,
+    claudeSessionId: string,
+  ): Agent | null {
+    const row = this.db.fetchOne(
+      "SELECT * FROM agents WHERE session_id = ? AND claude_session_id = ?",
+      [sessionId, claudeSessionId],
+    );
+    return row ? agentFromDbRow(row) : null;
+  }
+
+  assignClaudeSessionToNewestUnassignedAgent(
+    sessionId: string,
+    claudeSessionId: string,
+  ): Agent | null {
+    const row = this.db.fetchOne(
+      "SELECT * FROM agents WHERE session_id = ? AND (claude_session_id IS NULL OR claude_session_id = '') ORDER BY spawned_at DESC LIMIT 1",
+      [sessionId],
+    );
+    if (!row) return null;
+    const agent = agentFromDbRow(row);
+    agent.claudeSessionId = claudeSessionId;
+    this.db.update(
+      "agents",
+      { claude_session_id: claudeSessionId },
+      "id = ?",
+      [agent.id],
+    );
+    return agent;
   }
 
   listAgents(sessionId: string): Agent[] {

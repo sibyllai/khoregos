@@ -1,8 +1,8 @@
 /**
- * Filesystem watcher for gate trigger detection.
+ * Filesystem watcher for review checkpoint detection.
  *
  * Uses chokidar to monitor file changes and emit audit events.
- * Matches file changes against gate trigger patterns.
+ * Matches file changes against review trigger patterns.
  */
 
 import path from "node:path";
@@ -24,31 +24,34 @@ const IGNORED_DIRS = [
   ".next",
 ];
 
-export class GatePatternMatcher {
+export class ReviewPatternMatcher {
   private matchers: Map<string, picomatch.Matcher[]> = new Map();
 
-  constructor(gates: GateConfig[]) {
-    for (const gate of gates) {
-      const patterns = gate.trigger.file_patterns ?? [];
+  constructor(rules: GateConfig[]) {
+    for (const rule of rules) {
+      const patterns = rule.trigger.file_patterns ?? [];
       if (patterns.length > 0) {
         this.matchers.set(
-          gate.id,
+          rule.id,
           patterns.map((p: string) => picomatch(p)),
         );
       }
     }
   }
 
-  matchingGates(filePath: string): string[] {
+  matchingRules(filePath: string): string[] {
     const matched: string[] = [];
-    for (const [gateId, matchers] of this.matchers) {
+    for (const [ruleId, matchers] of this.matchers) {
       if (matchers.some((m) => m(filePath))) {
-        matched.push(gateId);
+        matched.push(ruleId);
       }
     }
     return matched;
   }
 }
+
+/** @deprecated Use ReviewPatternMatcher instead. */
+export const GatePatternMatcher = ReviewPatternMatcher;
 
 export interface FilesystemWatcherOptions {
   projectRoot: string;
@@ -66,7 +69,7 @@ export class FilesystemWatcher {
   private auditLogger: AuditLogger;
   private boundaryEnforcer?: BoundaryEnforcer;
   private eventBus?: EventBus;
-  private patternMatcher: GatePatternMatcher;
+  private patternMatcher: ReviewPatternMatcher;
 
   constructor(opts: FilesystemWatcherOptions) {
     this.projectRoot = opts.projectRoot;
@@ -74,7 +77,7 @@ export class FilesystemWatcher {
     this.auditLogger = opts.auditLogger;
     this.boundaryEnforcer = opts.boundaryEnforcer;
     this.eventBus = opts.eventBus;
-    this.patternMatcher = new GatePatternMatcher(opts.gates ?? []);
+    this.patternMatcher = new ReviewPatternMatcher(opts.gates ?? []);
   }
 
   start(): void {
@@ -115,14 +118,14 @@ export class FilesystemWatcher {
       this.eventBus.publish(event);
     }
 
-    const matchedGates = this.patternMatcher.matchingGates(relativePath);
-    if (matchedGates.length > 0) {
+    const matchedRules = this.patternMatcher.matchingRules(relativePath);
+    if (matchedRules.length > 0) {
       this.auditLogger.log({
         eventType: "gate_triggered",
-        action: `Gate pattern matched: ${relativePath}`,
+        action: `Sensitive file modified: ${relativePath}`,
         details: {
           file: relativePath,
-          gates: matchedGates,
+          rules: matchedRules,
           trigger_event: eventType,
         },
         filesAffected: [relativePath],

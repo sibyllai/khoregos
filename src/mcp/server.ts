@@ -2,8 +2,8 @@
  * MCP server exposing governance tools for Claude Code agents.
  *
  * Primary integration point — agents use MCP tools to interact with
- * governance: logging actions, checking gates, requesting locks,
- * saving/loading persistent context.
+ * governance: logging actions, requesting locks, saving/loading
+ * persistent context.
  */
 
 import { z } from "zod";
@@ -104,27 +104,18 @@ export class K6sServer {
   }
 
   private registerTools(): void {
-    this.mcp.tool(
+    // -- Audit logging.
+    this.mcp.registerTool(
       "k6s_log",
-      "Log an action to the audit trail. Call this before and after significant actions.",
       {
-        action: z.string().describe("Human-readable description of the action"),
-        event_type: z
-          .string()
-          .optional()
-          .describe("Type of event (log, file_write, task_update, etc.)"),
-        agent_name: z
-          .string()
-          .optional()
-          .describe("Name of the agent performing the action"),
-        details: z
-          .record(z.unknown())
-          .optional()
-          .describe("Additional structured details"),
-        files: z
-          .array(z.string())
-          .optional()
-          .describe("List of files affected by this action"),
+        description: "Log an action to the audit trail. Call this before and after significant actions.",
+        inputSchema: {
+          action: z.string().describe("Human-readable description of the action"),
+          event_type: z.string().optional().describe("Type of event (log, file_write, task_update, etc.)"),
+          agent_name: z.string().optional().describe("Name of the agent performing the action"),
+          details: z.record(z.unknown()).optional().describe("Additional structured details"),
+          files: z.array(z.string()).optional().describe("List of files affected by this action"),
+        },
       },
       async (args) => {
         const err = validateInput(args as Record<string, unknown>);
@@ -132,10 +123,7 @@ export class K6sServer {
 
         let agentId: string | null = null;
         if (args.agent_name) {
-          const agent = this.stateManager.getAgentByName(
-            this.sessionId,
-            args.agent_name,
-          );
+          const agent = this.stateManager.getAgentByName(this.sessionId, args.agent_name);
           if (agent) agentId = agent.id;
         }
 
@@ -148,30 +136,21 @@ export class K6sServer {
         });
 
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "logged",
-                event_id: event.id,
-                sequence: event.sequence,
-              }),
-            },
-          ],
+          content: [{ type: "text", text: JSON.stringify({ status: "logged", event_id: event.id, sequence: event.sequence }) }],
         };
       },
     );
 
-    this.mcp.tool(
+    // -- Persistent context.
+    this.mcp.registerTool(
       "k6s_save_context",
-      "Save persistent context that survives session restarts.",
       {
-        key: z.string().describe("Unique key for this context entry"),
-        value: z.string().describe("Value to save (JSON string)"),
-        agent_name: z
-          .string()
-          .optional()
-          .describe("Name of the agent saving context"),
+        description: "Save persistent context that survives session restarts.",
+        inputSchema: {
+          key: z.string().describe("Unique key for this context entry"),
+          value: z.string().describe("Value to save (JSON string)"),
+          agent_name: z.string().optional().describe("Name of the agent saving context"),
+        },
       },
       async (args) => {
         const err = validateInput(args as Record<string, unknown>);
@@ -179,10 +158,7 @@ export class K6sServer {
 
         let agentId: string | null = null;
         if (args.agent_name) {
-          const agent = this.stateManager.getAgentByName(
-            this.sessionId,
-            args.agent_name,
-          );
+          const agent = this.stateManager.getAgentByName(this.sessionId, args.agent_name);
           if (agent) agentId = agent.id;
         }
 
@@ -201,87 +177,51 @@ export class K6sServer {
         });
 
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "saved",
-                key: args.key,
-                updated_at: entry.updatedAt,
-              }),
-            },
-          ],
+          content: [{ type: "text", text: JSON.stringify({ status: "saved", key: args.key, updated_at: entry.updatedAt }) }],
         };
       },
     );
 
-    this.mcp.tool(
+    this.mcp.registerTool(
       "k6s_load_context",
-      "Load previously saved context.",
       {
-        key: z.string().describe("Key of the context entry to load"),
+        description: "Load previously saved context.",
+        inputSchema: {
+          key: z.string().describe("Key of the context entry to load"),
+        },
       },
       async (args) => {
         const entry = this.stateManager.loadContext(this.sessionId, args.key);
         if (!entry) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ status: "not_found", key: args.key }),
-              },
-            ],
-          };
+          return { content: [{ type: "text", text: JSON.stringify({ status: "not_found", key: args.key }) }] };
         }
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "found",
-                key: args.key,
-                value: entry.value,
-                updated_at: entry.updatedAt,
-              }),
-            },
-          ],
+          content: [{ type: "text", text: JSON.stringify({ status: "found", key: args.key, value: entry.value, updated_at: entry.updatedAt }) }],
         };
       },
     );
 
-    this.mcp.tool(
+    // -- File locks.
+    this.mcp.registerTool(
       "k6s_acquire_lock",
-      "Acquire an exclusive lock on a file to prevent conflicts.",
       {
-        path: z.string().describe("Path to the file to lock"),
-        agent_name: z
-          .string()
-          .describe("Name of the agent requesting the lock"),
-        duration_seconds: z
-          .number()
-          .optional()
-          .describe("Lock duration in seconds (default: 300)"),
+        description: "Acquire an exclusive lock on a file to prevent conflicts.",
+        inputSchema: {
+          path: z.string().describe("Path to the file to lock"),
+          agent_name: z.string().describe("Name of the agent requesting the lock"),
+          duration_seconds: z.number().optional().describe("Lock duration in seconds (default: 300)"),
+        },
       },
       async (args) => {
         const err = validateInput(args as Record<string, unknown>);
         if (err) return { content: [{ type: "text", text: JSON.stringify({ error: err }) }] };
 
-        let agent = this.stateManager.getAgentByName(
-          this.sessionId,
-          args.agent_name,
-        );
+        let agent = this.stateManager.getAgentByName(this.sessionId, args.agent_name);
         if (!agent) {
-          agent = this.stateManager.registerAgent({
-            sessionId: this.sessionId,
-            name: args.agent_name,
-          });
+          agent = this.stateManager.registerAgent({ sessionId: this.sessionId, name: args.agent_name });
         }
 
-        // Boundary check before lock acquisition
-        const [allowed, reason] = this.boundaryEnforcer.checkPathAllowed(
-          args.path,
-          args.agent_name,
-        );
+        const [allowed, reason] = this.boundaryEnforcer.checkPathAllowed(args.path, args.agent_name);
         if (!allowed) {
           this.boundaryEnforcer.recordViolation({
             filePath: args.path,
@@ -290,25 +230,10 @@ export class K6sServer {
             enforcementAction: "blocked",
             details: { reason, operation: "lock_acquire" },
           });
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  reason: `Boundary violation: ${reason}`,
-                }),
-              },
-            ],
-          };
+          return { content: [{ type: "text", text: JSON.stringify({ success: false, reason: `Boundary violation: ${reason}` }) }] };
         }
 
-        const result = this.lockManager.acquire(
-          args.path,
-          agent.id,
-          args.duration_seconds,
-        );
-
+        const result = this.lockManager.acquire(args.path, agent.id, args.duration_seconds);
         if (result.success) {
           this.auditLogger.log({
             eventType: "lock_acquired",
@@ -318,38 +243,27 @@ export class K6sServer {
           });
         }
 
-        return {
-          content: [
-            { type: "text", text: JSON.stringify(lockResultToDict(result)) },
-          ],
-        };
+        return { content: [{ type: "text", text: JSON.stringify(lockResultToDict(result)) }] };
       },
     );
 
-    this.mcp.tool(
+    this.mcp.registerTool(
       "k6s_release_lock",
-      "Release a file lock.",
       {
-        path: z.string().describe("Path to the file to unlock"),
-        agent_name: z
-          .string()
-          .describe("Name of the agent releasing the lock"),
+        description: "Release a file lock.",
+        inputSchema: {
+          path: z.string().describe("Path to the file to unlock"),
+          agent_name: z.string().describe("Name of the agent releasing the lock"),
+        },
       },
       async (args) => {
         const err = validateInput(args as Record<string, unknown>);
         if (err) return { content: [{ type: "text", text: JSON.stringify({ error: err }) }] };
 
-        const agent = this.stateManager.getAgentByName(
-          this.sessionId,
-          args.agent_name,
-        );
+        const agent = this.stateManager.getAgentByName(this.sessionId, args.agent_name);
         const agentId = agent?.id ?? "unknown";
 
-        // Boundary check before lock release
-        const [allowed, reason] = this.boundaryEnforcer.checkPathAllowed(
-          args.path,
-          args.agent_name,
-        );
+        const [allowed, reason] = this.boundaryEnforcer.checkPathAllowed(args.path, args.agent_name);
         if (!allowed) {
           this.boundaryEnforcer.recordViolation({
             filePath: args.path,
@@ -358,21 +272,10 @@ export class K6sServer {
             enforcementAction: "blocked",
             details: { reason, operation: "lock_release" },
           });
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  reason: `Boundary violation: ${reason}`,
-                }),
-              },
-            ],
-          };
+          return { content: [{ type: "text", text: JSON.stringify({ success: false, reason: `Boundary violation: ${reason}` }) }] };
         }
 
         const result = this.lockManager.release(args.path, agentId);
-
         if (result.success) {
           this.auditLogger.log({
             eventType: "lock_released",
@@ -382,70 +285,53 @@ export class K6sServer {
           });
         }
 
-        return {
-          content: [
-            { type: "text", text: JSON.stringify(lockResultToDict(result)) },
-          ],
-        };
+        return { content: [{ type: "text", text: JSON.stringify(lockResultToDict(result)) }] };
       },
     );
 
-    this.mcp.tool(
+    // -- Boundaries.
+    this.mcp.registerTool(
       "k6s_get_boundaries",
-      "Get the boundary rules for an agent (allowed/forbidden paths).",
       {
-        agent_name: z
-          .string()
-          .describe("Name of the agent to get boundaries for"),
+        description: "Get the boundary rules for an agent (allowed/forbidden paths).",
+        inputSchema: {
+          agent_name: z.string().describe("Name of the agent to get boundaries for"),
+        },
       },
       async (args) => {
-        const summary =
-          this.boundaryEnforcer.getAgentBoundariesSummary(args.agent_name);
-        return {
-          content: [{ type: "text", text: JSON.stringify(summary) }],
-        };
+        const summary = this.boundaryEnforcer.getAgentBoundariesSummary(args.agent_name);
+        return { content: [{ type: "text", text: JSON.stringify(summary) }] };
       },
     );
 
-    this.mcp.tool(
+    this.mcp.registerTool(
       "k6s_check_path",
-      "Check if an agent is allowed to access a file path.",
       {
-        path: z.string().describe("Path to check"),
-        agent_name: z.string().describe("Name of the agent"),
+        description: "Check if an agent is allowed to access a file path.",
+        inputSchema: {
+          path: z.string().describe("Path to check"),
+          agent_name: z.string().describe("Name of the agent"),
+        },
       },
       async (args) => {
-        const [allowed, reason] = this.boundaryEnforcer.checkPathAllowed(
-          args.path,
-          args.agent_name,
-        );
-        const result: Record<string, unknown> = {
-          path: args.path,
-          agent: args.agent_name,
-          allowed,
-        };
+        const [allowed, reason] = this.boundaryEnforcer.checkPathAllowed(args.path, args.agent_name);
+        const result: Record<string, unknown> = { path: args.path, agent: args.agent_name, allowed };
         if (reason) result.reason = reason;
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-        };
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
       },
     );
 
-    this.mcp.tool(
+    // -- Task tracking.
+    this.mcp.registerTool(
       "k6s_task_update",
-      "Update task state and progress.",
       {
-        task_id: z.string().describe("Unique identifier for the task"),
-        status: z
-          .string()
-          .describe(
-            "Task status (pending, in_progress, completed, failed)",
-          ),
-        progress: z.string().optional().describe("Progress description"),
-        agent_name: z
-          .string()
-          .optional()
-          .describe("Name of the agent updating the task"),
+        description: "Update task state and progress.",
+        inputSchema: {
+          task_id: z.string().describe("Unique identifier for the task"),
+          status: z.string().describe("Task status (pending, in_progress, completed, failed)"),
+          progress: z.string().optional().describe("Progress description"),
+          agent_name: z.string().optional().describe("Name of the agent updating the task"),
+        },
       },
       async (args) => {
         const err = validateInput(args as Record<string, unknown>);
@@ -453,10 +339,7 @@ export class K6sServer {
 
         let agentId: string | null = null;
         if (args.agent_name) {
-          const agent = this.stateManager.getAgentByName(
-            this.sessionId,
-            args.agent_name,
-          );
+          const agent = this.stateManager.getAgentByName(this.sessionId, args.agent_name);
           if (agent) agentId = agent.id;
         }
 
@@ -464,26 +347,13 @@ export class K6sServer {
           eventType: "task_update",
           action: `Task ${args.task_id}: ${args.status}`,
           agentId,
-          details: {
-            task_id: args.task_id,
-            status: args.status,
-            progress: args.progress ?? "",
-          },
+          details: { task_id: args.task_id, status: args.status, progress: args.progress ?? "" },
         });
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "updated",
-                task_id: args.task_id,
-              }),
-            },
-          ],
-        };
+        return { content: [{ type: "text", text: JSON.stringify({ status: "updated", task_id: args.task_id }) }] };
       },
     );
+
   }
 
   private registerResources(): void {
@@ -494,15 +364,11 @@ export class K6sServer {
       async () => {
         const session = this.stateManager.getSession(this.sessionId);
         return {
-          contents: [
-            {
-              uri: "k6s://session/current",
-              mimeType: "application/json",
-              text: session
-                ? JSON.stringify(session)
-                : JSON.stringify({ error: "No active session" }),
-            },
-          ],
+          contents: [{
+            uri: "k6s://session/current",
+            mimeType: "application/json",
+            text: session ? JSON.stringify(session) : JSON.stringify({ error: "No active session" }),
+          }],
         };
       },
     );
@@ -510,20 +376,15 @@ export class K6sServer {
     this.mcp.resource(
       "Recent Audit Events",
       "k6s://audit/recent",
-      {
-        description: "Last 50 audit events",
-        mimeType: "application/json",
-      },
+      { description: "Last 50 audit events", mimeType: "application/json" },
       async () => {
         const events = this.auditLogger.getEvents({ limit: 50 });
         return {
-          contents: [
-            {
-              uri: "k6s://audit/recent",
-              mimeType: "application/json",
-              text: JSON.stringify(events),
-            },
-          ],
+          contents: [{
+            uri: "k6s://audit/recent",
+            mimeType: "application/json",
+            text: JSON.stringify(events),
+          }],
         };
       },
     );
@@ -531,19 +392,14 @@ export class K6sServer {
     this.mcp.resource(
       "Boundary Rules",
       "k6s://boundaries/all",
-      {
-        description: "All configured boundary rules",
-        mimeType: "application/json",
-      },
+      { description: "All configured boundary rules", mimeType: "application/json" },
       async () => {
         return {
-          contents: [
-            {
-              uri: "k6s://boundaries/all",
-              mimeType: "application/json",
-              text: JSON.stringify(this.config.boundaries),
-            },
-          ],
+          contents: [{
+            uri: "k6s://boundaries/all",
+            mimeType: "application/json",
+            text: JSON.stringify(this.config.boundaries),
+          }],
         };
       },
     );

@@ -10,28 +10,12 @@ import Table from "cli-table3";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
 import { AuditLogger } from "../engine/audit.js";
-import type { AuditEvent, EventType } from "../models/audit.js";
-
-function withDb<T>(projectRoot: string, fn: (db: Db) => T): T {
-  const db = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
-  db.connect();
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
-}
-
-function resolveSessionId(
-  sm: StateManager,
-  session: string,
-): string | null {
-  if (session === "latest") {
-    const latest = sm.getLatestSession();
-    return latest?.id ?? null;
-  }
-  return session;
-}
+import type {
+  AuditEvent,
+  AuditSeverity,
+  EventType,
+} from "../models/audit.js";
+import { withDb, resolveSessionId } from "./shared.js";
 
 function parseDuration(duration: string): string {
   const value = parseInt(duration.slice(0, -1), 10);
@@ -55,6 +39,15 @@ function parseDuration(duration: string): string {
   return new Date(now - ms).toISOString();
 }
 
+/** Map internal event types to user-facing display names. */
+const EVENT_TYPE_DISPLAY: Record<string, string> = {
+  gate_triggered: "sensitive_needs_review",
+};
+
+function displayEventType(eventType: string): string {
+  return EVENT_TYPE_DISPLAY[eventType] ?? eventType;
+}
+
 function printEvent(event: AuditEvent): void {
   const agent = event.agentId ? event.agentId.slice(0, 8) : "system";
   const typeColor: Record<string, (s: string) => string> = {
@@ -63,12 +56,14 @@ function printEvent(event: AuditEvent): void {
     file_delete: chalk.red,
     session_start: chalk.blue,
     session_complete: chalk.blue,
+    sensitive_needs_review: chalk.magenta,
   };
-  const colorFn = typeColor[event.eventType] ?? chalk.white;
+  const displayType = displayEventType(event.eventType);
+  const colorFn = typeColor[displayType] ?? chalk.white;
   const time = new Date(event.timestamp).toTimeString().slice(0, 8);
 
   console.log(
-    `${chalk.dim(time)} ${chalk.cyan(agent.padStart(10))} ${colorFn(event.eventType.padEnd(15))} ${event.action}`,
+    `${chalk.dim(time)} ${chalk.cyan(agent.padStart(10))} ${colorFn(displayType.padEnd(15))} ${event.action}`,
   );
 }
 
@@ -81,6 +76,10 @@ export function registerAuditCommands(program: Command): void {
     .option("-s, --session <id>", "Session ID or 'latest'", "latest")
     .option("-a, --agent <name>", "Filter by agent name")
     .option("-t, --type <type>", "Filter by event type")
+    .option(
+      "--severity <level>",
+      "Filter by severity (info, warning, critical)",
+    )
     .option("--since <duration>", "Show events since (e.g., '1h', '30m')")
     .option("-n, --limit <number>", "Maximum events to show", "50")
     .action(
@@ -88,6 +87,7 @@ export function registerAuditCommands(program: Command): void {
         session: string;
         agent?: string;
         type?: string;
+        severity?: string;
         since?: string;
         limit: string;
       }) => {
@@ -107,8 +107,14 @@ export function registerAuditCommands(program: Command): void {
             limit: parseInt(opts.limit, 10),
             eventType: opts.type as EventType | undefined,
             since: opts.since ? parseDuration(opts.since) : undefined,
+            severity: opts.severity as AuditSeverity | undefined,
           });
-          return { events, sessionId };
+
+          // Build agent ID -> name map for display.
+          const agents = sm.listAgents(sessionId);
+          const agentNameById = new Map(agents.map((a) => [a.id, a.name]));
+
+          return { events, sessionId, agentNameById };
         });
 
         if (!result || !result.events.length) {
@@ -120,17 +126,28 @@ export function registerAuditCommands(program: Command): void {
         console.log();
 
         const table = new Table({
-          head: ["Time", "Seq", "Agent", "Type", "Action"],
+          head: ["Time", "Seq", "Agent", "Sev", "Type", "Action"],
         });
 
+        const severityColor: Record<string, (s: string) => string> = {
+          critical: chalk.red,
+          warning: chalk.yellow,
+          info: chalk.dim,
+        };
         for (const event of result.events) {
+          const sev = event.severity ?? "info";
+          const colorFn = severityColor[sev] ?? chalk.dim;
+          const agentLabel = event.agentId
+            ? result.agentNameById.get(event.agentId) ?? event.agentId.slice(0, 8) + "..."
+            : "system";
           table.push([
             new Date(event.timestamp).toTimeString().slice(0, 8),
             String(event.sequence),
-            event.agentId ? event.agentId.slice(0, 8) + "..." : "system",
-            event.eventType,
-            event.action.length > 50
-              ? event.action.slice(0, 50) + "..."
+            agentLabel,
+            colorFn(sev.slice(0, 4)),
+            displayEventType(event.eventType),
+            event.action.length > 45
+              ? event.action.slice(0, 45) + "..."
               : event.action,
           ]);
         }
@@ -228,7 +245,7 @@ export function registerAuditCommands(program: Command): void {
           output = JSON.stringify(events, null, 2);
         } else if (opts.format === "csv") {
           const header =
-            "timestamp,sequence,session_id,agent_id,event_type,action,files_affected";
+            "timestamp,sequence,session_id,agent_id,severity,event_type,action,files_affected";
           const rows = events.map((e) => {
             const files = e.filesAffected
               ? JSON.parse(e.filesAffected).join(";")
@@ -238,7 +255,8 @@ export function registerAuditCommands(program: Command): void {
               e.sequence,
               e.sessionId,
               e.agentId ?? "",
-              e.eventType,
+              e.severity ?? "info",
+              displayEventType(e.eventType),
               `"${e.action.replace(/"/g, '""')}"`,
               files,
             ].join(",");

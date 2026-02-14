@@ -24,15 +24,19 @@ export const SessionSchema = z.object({
   parentSessionId: z.string().nullable().default(null),
   configSnapshot: z.string().nullable().default(null),
   contextSummary: z.string().nullable().default(null),
-  totalCostUsd: z.number().default(0),
-  totalInputTokens: z.number().default(0),
-  totalOutputTokens: z.number().default(0),
   metadata: z.string().nullable().default(null),
+  operator: z.string().nullable().default(null),
+  hostname: z.string().nullable().default(null),
+  k6sVersion: z.string().nullable().default(null),
+  claudeCodeVersion: z.string().nullable().default(null),
+  gitBranch: z.string().nullable().default(null),
+  gitSha: z.string().nullable().default(null),
+  gitDirty: z.boolean().default(false),
 });
 export type Session = z.infer<typeof SessionSchema>;
 
 export function sessionToDbRow(s: Session): Row {
-  return {
+  const row: Row = {
     id: s.id,
     objective: s.objective,
     state: s.state,
@@ -41,11 +45,16 @@ export function sessionToDbRow(s: Session): Row {
     parent_session_id: s.parentSessionId,
     config_snapshot: s.configSnapshot,
     context_summary: s.contextSummary,
-    total_cost_usd: s.totalCostUsd,
-    total_input_tokens: s.totalInputTokens,
-    total_output_tokens: s.totalOutputTokens,
     metadata: s.metadata,
   };
+  if (s.operator != null) row.operator = s.operator;
+  if (s.hostname != null) row.hostname = s.hostname;
+  if (s.k6sVersion != null) row.k6s_version = s.k6sVersion;
+  if (s.claudeCodeVersion != null) row.claude_code_version = s.claudeCodeVersion;
+  if (s.gitBranch != null) row.git_branch = s.gitBranch;
+  if (s.gitSha != null) row.git_sha = s.gitSha;
+  row.git_dirty = s.gitDirty ? 1 : 0;
+  return row;
 }
 
 export function sessionFromDbRow(row: Row): Session {
@@ -58,10 +67,14 @@ export function sessionFromDbRow(row: Row): Session {
     parentSessionId: (row.parent_session_id as string) ?? null,
     configSnapshot: (row.config_snapshot as string) ?? null,
     contextSummary: (row.context_summary as string) ?? null,
-    totalCostUsd: (row.total_cost_usd as number) ?? 0,
-    totalInputTokens: (row.total_input_tokens as number) ?? 0,
-    totalOutputTokens: (row.total_output_tokens as number) ?? 0,
     metadata: (row.metadata as string) ?? null,
+    operator: (row.operator as string) ?? null,
+    hostname: (row.hostname as string) ?? null,
+    k6sVersion: (row.k6s_version as string) ?? null,
+    claudeCodeVersion: (row.claude_code_version as string) ?? null,
+    gitBranch: (row.git_branch as string) ?? null,
+    gitSha: (row.git_sha as string) ?? null,
+    gitDirty: (row.git_dirty as number) === 1,
   };
 }
 
