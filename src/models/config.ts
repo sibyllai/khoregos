@@ -12,7 +12,6 @@ export const ProjectConfigSchema = z.object({
 });
 
 export const SessionConfigSchema = z.object({
-  default_budget_usd: z.number().default(50.0),
   context_retention_days: z.number().default(90),
   audit_retention_days: z.number().default(365),
 });
@@ -22,15 +21,12 @@ export const BoundaryConfigSchema = z.object({
   allowed_paths: z.array(z.string()).default([]),
   forbidden_paths: z.array(z.string()).default([]),
   enforcement: z.enum(["advisory", "strict"]).default("advisory"),
-  max_tokens_per_hour: z.number().nullable().optional(),
-  max_cost_per_hour: z.number().nullable().optional(),
 });
 export type BoundaryConfig = z.infer<typeof BoundaryConfigSchema>;
 
 export const GateTriggerSchema = z.object({
   event_types: z.array(z.string()).optional(),
   file_patterns: z.array(z.string()).optional(),
-  cost_threshold: z.number().optional(),
   custom: z.string().optional(),
 });
 

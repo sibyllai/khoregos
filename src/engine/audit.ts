@@ -9,6 +9,7 @@ import { ulid } from "ulid";
 import type { Db } from "../store/db.js";
 import {
   type AuditEvent,
+  type AuditSeverity,
   type EventType,
   auditEventFromDbRow,
   auditEventToDbRow,
@@ -41,6 +42,7 @@ export class AuditLogger {
     details?: Record<string, unknown>;
     filesAffected?: string[];
     gateId?: string | null;
+    severity?: AuditSeverity;
   }): AuditEvent {
     this.sequence += 1;
 
@@ -58,6 +60,7 @@ export class AuditLogger {
         : null,
       gateId: opts.gateId ?? null,
       hmac: null,
+      severity: opts.severity ?? "info",
     };
 
     this.db.insert("audit_events", auditEventToDbRow(event));
@@ -70,6 +73,7 @@ export class AuditLogger {
     eventType?: EventType;
     agentId?: string;
     since?: string;
+    severity?: AuditSeverity;
   }): AuditEvent[] {
     const conditions: string[] = ["session_id = ?"];
     const params: unknown[] = [this.sessionId];
@@ -85,6 +89,10 @@ export class AuditLogger {
     if (opts?.since) {
       conditions.push("timestamp > ?");
       params.push(opts.since);
+    }
+    if (opts?.severity) {
+      conditions.push("severity = ?");
+      params.push(opts.severity);
     }
 
     const where = conditions.join(" AND ");
