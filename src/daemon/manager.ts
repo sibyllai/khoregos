@@ -7,11 +7,15 @@
 
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import path from "node:path";
 
@@ -33,6 +37,30 @@ export class DaemonState {
     return existsSync(this.stateFile);
   }
 
+  /**
+   * Atomically create the state file using O_EXCL. Returns true if the
+   * file was created, false if it already exists (another session is
+   * active). Eliminates the TOCTOU race between isRunning() and write.
+   */
+  createState(state: Record<string, unknown>): boolean {
+    mkdirSync(this.khoregoDir, { recursive: true });
+    chmodSync(this.khoregoDir, 0o700);
+    try {
+      const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+      const fd = openSync(this.stateFile, flags, 0o600);
+      try {
+        writeSync(fd, JSON.stringify(state, null, 2));
+      } finally {
+        closeSync(fd);
+      }
+      return true;
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw e;
+    }
+  }
+
+  /** Overwrite an existing state file (use after createState). */
   writeState(state: Record<string, unknown>): void {
     mkdirSync(this.khoregoDir, { recursive: true });
     chmodSync(this.khoregoDir, 0o700);
@@ -41,7 +69,6 @@ export class DaemonState {
   }
 
   readState(): Record<string, unknown> {
-    if (!existsSync(this.stateFile)) return {};
     try {
       return JSON.parse(readFileSync(this.stateFile, "utf-8"));
     } catch {
@@ -50,7 +77,11 @@ export class DaemonState {
   }
 
   removeState(): void {
-    if (existsSync(this.stateFile)) unlinkSync(this.stateFile);
+    try {
+      unlinkSync(this.stateFile);
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
   }
 }
 
