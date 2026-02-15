@@ -9,7 +9,7 @@
  * and writes an audit event to SQLite synchronously.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { loadConfigOrDefault } from "../models/config.js";
@@ -21,9 +21,31 @@ import { ReviewPatternMatcher } from "../watcher/fs.js";
 import { Db } from "../store/db.js";
 import type { EventType } from "../models/audit.js";
 
+// Maximum bytes to read from stdin before aborting (1 MB).
+// Hook payloads are small JSON objects; anything larger is anomalous.
+const MAX_STDIN_BYTES = 1_048_576;
+
 function readHookInput(): Record<string, unknown> {
   try {
-    const raw = readFileSync(0, "utf-8"); // stdin = fd 0
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    const buf = Buffer.alloc(65_536);
+
+    // Read stdin in chunks with a size cap.
+    while (true) {
+      let bytesRead: number;
+      try {
+        bytesRead = readSync(0, buf, 0, buf.length, null);
+      } catch {
+        break; // EOF or read error.
+      }
+      if (bytesRead === 0) break;
+      totalBytes += bytesRead;
+      if (totalBytes > MAX_STDIN_BYTES) return {};
+      chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
+    }
+
+    const raw = Buffer.concat(chunks).toString("utf-8");
     if (!raw.trim()) return {};
     return JSON.parse(raw);
   } catch {
