@@ -15,6 +15,13 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+/** Write a file and set owner-only permissions (0o600). */
+function writeSecureFile(filePath: string, content: string): void {
+  writeFileSync(filePath, content, { mode: 0o600 });
+  // chmod explicitly in case the file already existed with wider perms.
+  chmodSync(filePath, 0o600);
+}
+
 export class DaemonState {
   readonly stateFile: string;
 
@@ -101,7 +108,7 @@ All agents MUST:
     }
   }
 
-  writeFileSync(claudeMd, existing.trimEnd() + governanceSection);
+  writeSecureFile(claudeMd, existing.trimEnd() + governanceSection);
 }
 
 export function removeClaudeMdGovernance(projectRoot: string): void {
@@ -116,7 +123,7 @@ export function removeClaudeMdGovernance(projectRoot: string): void {
   if (end !== -1) {
     const endFull = end + "<!-- K6S_GOVERNANCE_END -->".length;
     const newContent = content.slice(0, start).trimEnd() + content.slice(endFull);
-    writeFileSync(claudeMd, newContent);
+    writeSecureFile(claudeMd, newContent);
   }
 }
 
@@ -144,7 +151,7 @@ export function registerMcpServer(projectRoot: string): void {
     command: "k6s",
     args: ["mcp", "serve"],
   };
-  writeFileSync(filePath, JSON.stringify(settings, null, 2));
+  writeSecureFile(filePath, JSON.stringify(settings, null, 2));
 }
 
 export function unregisterMcpServer(projectRoot: string): void {
@@ -156,7 +163,7 @@ export function unregisterMcpServer(projectRoot: string): void {
     const servers = settings.mcpServers as Record<string, unknown> | undefined;
     if (servers?.khoregos) {
       delete servers.khoregos;
-      writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+      writeSecureFile(settingsFile, JSON.stringify(settings, null, 2));
     }
   } catch {
     // ignore corrupt file
@@ -201,7 +208,7 @@ export function registerHooks(projectRoot: string): void {
     ],
   };
 
-  writeFileSync(filePath, JSON.stringify(settings, null, 2));
+  writeSecureFile(filePath, JSON.stringify(settings, null, 2));
 }
 
 export function unregisterHooks(projectRoot: string): void {
@@ -212,7 +219,7 @@ export function unregisterHooks(projectRoot: string): void {
     const settings = JSON.parse(readFileSync(settingsFile, "utf-8"));
     if (settings.hooks) {
       delete settings.hooks;
-      writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+      writeSecureFile(settingsFile, JSON.stringify(settings, null, 2));
     }
   } catch {
     // ignore corrupt file
