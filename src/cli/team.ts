@@ -18,7 +18,7 @@ import {
   unregisterHooks,
 } from "../daemon/manager.js";
 import { AuditLogger } from "../engine/audit.js";
-import { loadConfig } from "../models/config.js";
+import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
 import { type Session, type SessionState } from "../models/session.js";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
@@ -119,7 +119,7 @@ export function registerTeamCommands(program: Command): void {
         const sm = new StateManager(db, projectRoot);
         const s = sm.createSession({
           objective,
-          configSnapshot: JSON.stringify(config),
+          configSnapshot: JSON.stringify(sanitizeConfigForStorage(config)),
         });
         s.operator = operator ?? null;
         s.hostname = hostname();
@@ -259,7 +259,7 @@ export function registerTeamCommands(program: Command): void {
         const config = loadConfig(configFile);
         const newSession = sm.createSession({
           objective: prev.objective,
-          configSnapshot: JSON.stringify(config),
+          configSnapshot: JSON.stringify(sanitizeConfigForStorage(config)),
           parentSessionId: prev.id,
         });
 

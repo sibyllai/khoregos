@@ -54,6 +54,8 @@ export const OpenTelemetryConfigSchema = z.object({
 export const WebhookConfigSchema = z.object({
   url: z.string(),
   events: z.array(z.string()).default([]),
+  // Supports env var references: values starting with "$" are resolved
+  // from process.env at runtime (e.g. "$K6S_WEBHOOK_SECRET").
   secret: z.string().optional(),
 });
 
@@ -101,6 +103,33 @@ export function loadConfigOrDefault(
 export function saveConfig(config: K6sConfig, filePath: string): void {
   const yaml = YAML.stringify(config, { sortMapEntries: false });
   writeFileSync(filePath, yaml);
+}
+
+/**
+ * Resolve a webhook secret value. If it starts with "$", treat it as an
+ * environment variable name and return the env value (or undefined).
+ */
+export function resolveWebhookSecret(secret: string | undefined): string | undefined {
+  if (!secret) return undefined;
+  if (secret.startsWith("$")) {
+    const envName = secret.slice(1);
+    return process.env[envName] ?? undefined;
+  }
+  return secret;
+}
+
+/**
+ * Return a deep copy of the config with webhook secrets redacted.
+ * Use this before persisting config snapshots to the database.
+ */
+export function sanitizeConfigForStorage(config: K6sConfig): K6sConfig {
+  const copy = structuredClone(config);
+  for (const wh of copy.observability?.webhooks ?? []) {
+    if (wh.secret) {
+      wh.secret = "[REDACTED]";
+    }
+  }
+  return copy;
 }
 
 export function generateDefaultConfig(projectName: string): K6sConfig {
