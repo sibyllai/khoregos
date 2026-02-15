@@ -2,7 +2,7 @@
  * Database schema migrations for Khoregos.
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 type Migration = [version: number, sql: string];
 
@@ -140,6 +140,13 @@ const MIGRATIONS: Migration[] = [
     -- Agents: Claude Code subagent session id for correlating post-tool-use events
     ALTER TABLE agents ADD COLUMN claude_session_id TEXT;
     CREATE INDEX IF NOT EXISTS idx_agents_claude_session ON agents(session_id, claude_session_id);
+    `,
+  ],
+  [
+    3,
+    `
+    -- Session: correlation / trace ID for linking to external observability.
+    ALTER TABLE sessions ADD COLUMN trace_id TEXT;
     `,
   ],
 ];

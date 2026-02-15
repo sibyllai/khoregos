@@ -19,6 +19,7 @@ const TABLE_SCHEMA: Record<string, ReadonlySet<string>> = {
     "total_cost_usd", "total_input_tokens", "total_output_tokens",
     "metadata", "operator", "hostname", "k6s_version",
     "claude_code_version", "git_branch", "git_sha", "git_dirty",
+    "trace_id",
   ]),
   agents: new Set([
     "id", "session_id", "name", "role", "specialization", "state",

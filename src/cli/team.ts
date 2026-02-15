@@ -17,13 +17,14 @@ import {
   removeClaudeMdGovernance,
   unregisterHooks,
 } from "../daemon/manager.js";
-import { AuditLogger } from "../engine/audit.js";
+import { AuditLogger, pruneAuditEvents } from "../engine/audit.js";
+import { loadSigningKey } from "../engine/signing.js";
 import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
 import { type Session, type SessionState } from "../models/session.js";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
 
-const K6S_VERSION = "0.1.0";
+const K6S_VERSION = "0.3.0";
 
 function getGitContext(projectRoot: string): {
   branch: string | null;
@@ -131,7 +132,8 @@ export function registerTeamCommands(program: Command): void {
         sm.updateSession(s);
         sm.markSessionActive(s.id);
 
-        const logger = new AuditLogger(db, s.id);
+        const teamKey = loadSigningKey(khoregoDir);
+        const logger = new AuditLogger(db, s.id, s.traceId, teamKey);
         logger.start();
         logger.log({
           eventType: "session_start",
@@ -148,6 +150,16 @@ export function registerTeamCommands(program: Command): void {
           },
         });
         logger.stop();
+
+        // Auto-prune old audit data (silent, best-effort).
+        const retentionDays = config.session.audit_retention_days;
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - retentionDays);
+        try {
+          pruneAuditEvents(db, cutoff.toISOString());
+        } catch {
+          // Non-critical — don't block session start.
+        }
 
         return s;
       });

@@ -32,6 +32,7 @@ export const SessionSchema = z.object({
   gitBranch: z.string().nullable().default(null),
   gitSha: z.string().nullable().default(null),
   gitDirty: z.boolean().default(false),
+  traceId: z.string().nullable().default(null),
 });
 export type Session = z.infer<typeof SessionSchema>;
 
@@ -54,6 +55,7 @@ export function sessionToDbRow(s: Session): Row {
   if (s.gitBranch != null) row.git_branch = s.gitBranch;
   if (s.gitSha != null) row.git_sha = s.gitSha;
   row.git_dirty = s.gitDirty ? 1 : 0;
+  if (s.traceId != null) row.trace_id = s.traceId;
   return row;
 }
 
@@ -75,6 +77,7 @@ export function sessionFromDbRow(row: Row): Session {
     gitBranch: (row.git_branch as string) ?? null,
     gitSha: (row.git_sha as string) ?? null,
     gitDirty: (row.git_dirty as number) === 1,
+    traceId: (row.trace_id as string) ?? null,
   };
 }
 
