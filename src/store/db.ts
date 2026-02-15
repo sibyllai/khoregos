@@ -9,12 +9,82 @@ import { SCHEMA_VERSION, getMigrations } from "./migrations.js";
 
 export type Row = Record<string, unknown>;
 
+// ── Schema registry ──────────────────────────────────────────────────
+// Allowlist of valid table names and their columns.
+// This prevents SQL injection via interpolated identifiers.
+const TABLE_SCHEMA: Record<string, ReadonlySet<string>> = {
+  sessions: new Set([
+    "id", "objective", "state", "started_at", "ended_at",
+    "parent_session_id", "config_snapshot", "context_summary",
+    "total_cost_usd", "total_input_tokens", "total_output_tokens",
+    "metadata", "operator", "hostname", "k6s_version",
+    "claude_code_version", "git_branch", "git_sha", "git_dirty",
+  ]),
+  agents: new Set([
+    "id", "session_id", "name", "role", "specialization", "state",
+    "spawned_at", "boundary_config", "metadata", "claude_session_id",
+  ]),
+  audit_events: new Set([
+    "id", "sequence", "session_id", "agent_id", "timestamp",
+    "event_type", "action", "details", "files_affected",
+    "gate_id", "hmac", "severity",
+  ]),
+  gates: new Set([
+    "id", "session_id", "rule_id", "rule_name", "agent_id", "state",
+    "trigger_event_id", "triggered_at", "resolved_at",
+    "resolved_by", "reason", "details",
+  ]),
+  cost_records: new Set([
+    "id", "session_id", "agent_id", "task_id", "timestamp",
+    "model", "input_tokens", "output_tokens", "estimated_cost_usd",
+  ]),
+  context_store: new Set([
+    "key", "session_id", "agent_id", "value", "updated_at",
+  ]),
+  file_locks: new Set([
+    "path", "session_id", "agent_id", "acquired_at", "expires_at",
+  ]),
+  boundary_violations: new Set([
+    "id", "session_id", "agent_id", "timestamp", "file_path",
+    "violation_type", "enforcement_action", "details",
+  ]),
+  schema_migrations: new Set(["version", "applied_at"]),
+};
+
+/** Only allow simple alphanumeric + underscore identifiers. */
+const SAFE_IDENTIFIER = /^[a-z][a-z0-9_]*$/i;
+
 export class Db {
   readonly path: string;
   private _db: Database.Database | null = null;
 
   constructor(dbPath: string) {
     this.path = dbPath;
+  }
+
+  // ── Identifier validation ────────────────────────────────────────
+  // All methods that interpolate identifiers into SQL must call these
+  // before building the query string.
+
+  private assertValidTable(table: string): void {
+    if (!TABLE_SCHEMA[table]) {
+      throw new Error(`Db: unknown table "${table}"`);
+    }
+  }
+
+  private assertValidColumns(table: string, columns: string[]): void {
+    const schema = TABLE_SCHEMA[table];
+    if (!schema) {
+      throw new Error(`Db: unknown table "${table}"`);
+    }
+    for (const col of columns) {
+      if (!SAFE_IDENTIFIER.test(col)) {
+        throw new Error(`Db: unsafe column identifier "${col}"`);
+      }
+      if (!schema.has(col)) {
+        throw new Error(`Db: unknown column "${col}" for table "${table}"`);
+      }
+    }
   }
 
   connect(): void {
@@ -81,20 +151,24 @@ export class Db {
   }
 
   insert(table: string, data: Row): number | bigint {
-    const columns = Object.keys(data).join(", ");
-    const placeholders = Object.keys(data)
-      .map(() => "?")
-      .join(", ");
+    this.assertValidTable(table);
+    const keys = Object.keys(data);
+    this.assertValidColumns(table, keys);
+
+    const columns = keys.join(", ");
+    const placeholders = keys.map(() => "?").join(", ");
     const sql = `INSERT INTO ${table} (${columns}) VALUES (${placeholders})`;
     const result = this.db.prepare(sql).run(...Object.values(data));
     return result.lastInsertRowid;
   }
 
   insertOrReplace(table: string, data: Row): void {
-    const columns = Object.keys(data).join(", ");
-    const placeholders = Object.keys(data)
-      .map(() => "?")
-      .join(", ");
+    this.assertValidTable(table);
+    const keys = Object.keys(data);
+    this.assertValidColumns(table, keys);
+
+    const columns = keys.join(", ");
+    const placeholders = keys.map(() => "?").join(", ");
     const sql = `INSERT OR REPLACE INTO ${table} (${columns}) VALUES (${placeholders})`;
     this.db.prepare(sql).run(...Object.values(data));
   }
@@ -105,9 +179,11 @@ export class Db {
     where: string,
     whereParams: unknown[],
   ): number {
-    const setClause = Object.keys(data)
-      .map((k) => `${k} = ?`)
-      .join(", ");
+    this.assertValidTable(table);
+    const keys = Object.keys(data);
+    this.assertValidColumns(table, keys);
+
+    const setClause = keys.map((k) => `${k} = ?`).join(", ");
     const sql = `UPDATE ${table} SET ${setClause} WHERE ${where}`;
     const result = this.db
       .prepare(sql)
@@ -116,6 +192,7 @@ export class Db {
   }
 
   delete(table: string, where: string, whereParams: unknown[]): number {
+    this.assertValidTable(table);
     const sql = `DELETE FROM ${table} WHERE ${where}`;
     const result = this.db.prepare(sql).run(...whereParams);
     return result.changes;
