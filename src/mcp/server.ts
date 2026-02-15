@@ -11,11 +11,24 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Db } from "../store/db.js";
 import type { K6sConfig } from "../models/config.js";
-import type { EventType } from "../models/audit.js";
+import { EventType } from "../models/audit.js";
 import { AuditLogger } from "../engine/audit.js";
 import { BoundaryEnforcer } from "../engine/boundaries.js";
 import { FileLockManager, lockResultToDict } from "../engine/locks.js";
 import { StateManager } from "../engine/state.js";
+
+// Event types that agents are allowed to submit via k6s_log.
+// System-level types (session lifecycle, gate_triggered, boundary_violation,
+// lock events, tool_use, system) are reserved for internal use only.
+const AGENT_EVENT_TYPES = [
+  "log",
+  "file_create",
+  "file_modify",
+  "file_delete",
+  "task_create",
+  "task_update",
+  "task_complete",
+] as const satisfies readonly EventType[];
 
 const INPUT_LIMITS = {
   action: 500,
@@ -111,7 +124,7 @@ export class K6sServer {
         description: "Log an action to the audit trail. Call this before and after significant actions.",
         inputSchema: {
           action: z.string().describe("Human-readable description of the action"),
-          event_type: z.string().optional().describe("Type of event (log, file_write, task_update, etc.)"),
+          event_type: z.enum(AGENT_EVENT_TYPES).optional().describe("Type of event (log, file_create, file_modify, file_delete, task_create, task_update, task_complete)"),
           agent_name: z.string().optional().describe("Name of the agent performing the action"),
           details: z.record(z.unknown()).optional().describe("Additional structured details"),
           files: z.array(z.string()).optional().describe("List of files affected by this action"),
@@ -127,8 +140,15 @@ export class K6sServer {
           if (agent) agentId = agent.id;
         }
 
+        // Zod validates the enum at schema level, but belt-and-suspenders:
+        // fall back to "log" if something unexpected slips through.
+        const allowedSet: ReadonlySet<string> = new Set(AGENT_EVENT_TYPES);
+        const eventType: EventType = allowedSet.has(args.event_type ?? "")
+          ? (args.event_type as EventType)
+          : "log";
+
         const event = this.auditLogger.log({
-          eventType: (args.event_type ?? "log") as EventType,
+          eventType,
           action: args.action,
           agentId,
           details: args.details as Record<string, unknown> | undefined,
