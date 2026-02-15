@@ -18,7 +18,7 @@ import {
   unregisterHooks,
 } from "../daemon/manager.js";
 import { AuditLogger } from "../engine/audit.js";
-import { loadConfig } from "../models/config.js";
+import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
 import { type Session, type SessionState } from "../models/session.js";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
@@ -119,7 +119,7 @@ export function registerTeamCommands(program: Command): void {
         const sm = new StateManager(db, projectRoot);
         const s = sm.createSession({
           objective,
-          configSnapshot: JSON.stringify(config),
+          configSnapshot: JSON.stringify(sanitizeConfigForStorage(config)),
         });
         s.operator = operator ?? null;
         s.hostname = hostname();
@@ -161,7 +161,15 @@ export function registerTeamCommands(program: Command): void {
       registerHooks(projectRoot);
       console.log(chalk.green("✓") + " MCP server and hooks registered");
 
-      daemon.writeState({ session_id: session.id });
+      // Atomic state file creation — prevents race if two `team start`
+      // commands run concurrently (the isRunning() check above is a fast
+      // path for UX; this is the actual safety net).
+      if (!daemon.createState({ session_id: session.id })) {
+        const raceState = daemon.readState();
+        const raceSid = ((raceState.session_id as string) ?? "unknown").slice(0, 8);
+        console.log(chalk.yellow(`Race detected: session ${raceSid}... was started concurrently.`));
+        process.exit(1);
+      }
 
       const objectiveOneline = objective.replace(/\s+/g, " ").trim();
       console.log();
@@ -259,7 +267,7 @@ export function registerTeamCommands(program: Command): void {
         const config = loadConfig(configFile);
         const newSession = sm.createSession({
           objective: prev.objective,
-          configSnapshot: JSON.stringify(config),
+          configSnapshot: JSON.stringify(sanitizeConfigForStorage(config)),
           parentSessionId: prev.id,
         });
 
@@ -284,7 +292,14 @@ export function registerTeamCommands(program: Command): void {
       injectClaudeMdGovernance(projectRoot, result.newSession.id);
       registerMcpServer(projectRoot);
       registerHooks(projectRoot);
-      daemon.writeState({ session_id: result.newSession.id });
+
+      // Atomic state file creation — same race guard as team start.
+      if (!daemon.createState({ session_id: result.newSession.id })) {
+        const raceState = daemon.readState();
+        const raceSid = ((raceState.session_id as string) ?? "unknown").slice(0, 8);
+        console.log(chalk.yellow(`Race detected: session ${raceSid}... was started concurrently.`));
+        process.exit(1);
+      }
 
       console.log(chalk.green("✓") + ` New session ${chalk.bold(result.newSession.id.slice(0, 8) + "...")} created`);
       console.log(chalk.green("✓") + " Previous context injected into CLAUDE.md");

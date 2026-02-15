@@ -7,13 +7,24 @@
 
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import path from "node:path";
+
+/** Write a file and set owner-only permissions (0o600). */
+function writeSecureFile(filePath: string, content: string): void {
+  writeFileSync(filePath, content, { mode: 0o600 });
+  // chmod explicitly in case the file already existed with wider perms.
+  chmodSync(filePath, 0o600);
+}
 
 export class DaemonState {
   readonly stateFile: string;
@@ -26,6 +37,30 @@ export class DaemonState {
     return existsSync(this.stateFile);
   }
 
+  /**
+   * Atomically create the state file using O_EXCL. Returns true if the
+   * file was created, false if it already exists (another session is
+   * active). Eliminates the TOCTOU race between isRunning() and write.
+   */
+  createState(state: Record<string, unknown>): boolean {
+    mkdirSync(this.khoregoDir, { recursive: true });
+    chmodSync(this.khoregoDir, 0o700);
+    try {
+      const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+      const fd = openSync(this.stateFile, flags, 0o600);
+      try {
+        writeSync(fd, JSON.stringify(state, null, 2));
+      } finally {
+        closeSync(fd);
+      }
+      return true;
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw e;
+    }
+  }
+
+  /** Overwrite an existing state file (use after createState). */
   writeState(state: Record<string, unknown>): void {
     mkdirSync(this.khoregoDir, { recursive: true });
     chmodSync(this.khoregoDir, 0o700);
@@ -34,7 +69,6 @@ export class DaemonState {
   }
 
   readState(): Record<string, unknown> {
-    if (!existsSync(this.stateFile)) return {};
     try {
       return JSON.parse(readFileSync(this.stateFile, "utf-8"));
     } catch {
@@ -43,7 +77,11 @@ export class DaemonState {
   }
 
   removeState(): void {
-    if (existsSync(this.stateFile)) unlinkSync(this.stateFile);
+    try {
+      unlinkSync(this.stateFile);
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
   }
 }
 
@@ -101,7 +139,7 @@ All agents MUST:
     }
   }
 
-  writeFileSync(claudeMd, existing.trimEnd() + governanceSection);
+  writeSecureFile(claudeMd, existing.trimEnd() + governanceSection);
 }
 
 export function removeClaudeMdGovernance(projectRoot: string): void {
@@ -116,7 +154,7 @@ export function removeClaudeMdGovernance(projectRoot: string): void {
   if (end !== -1) {
     const endFull = end + "<!-- K6S_GOVERNANCE_END -->".length;
     const newContent = content.slice(0, start).trimEnd() + content.slice(endFull);
-    writeFileSync(claudeMd, newContent);
+    writeSecureFile(claudeMd, newContent);
   }
 }
 
@@ -144,7 +182,7 @@ export function registerMcpServer(projectRoot: string): void {
     command: "k6s",
     args: ["mcp", "serve"],
   };
-  writeFileSync(filePath, JSON.stringify(settings, null, 2));
+  writeSecureFile(filePath, JSON.stringify(settings, null, 2));
 }
 
 export function unregisterMcpServer(projectRoot: string): void {
@@ -156,7 +194,7 @@ export function unregisterMcpServer(projectRoot: string): void {
     const servers = settings.mcpServers as Record<string, unknown> | undefined;
     if (servers?.khoregos) {
       delete servers.khoregos;
-      writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+      writeSecureFile(settingsFile, JSON.stringify(settings, null, 2));
     }
   } catch {
     // ignore corrupt file
@@ -201,7 +239,7 @@ export function registerHooks(projectRoot: string): void {
     ],
   };
 
-  writeFileSync(filePath, JSON.stringify(settings, null, 2));
+  writeSecureFile(filePath, JSON.stringify(settings, null, 2));
 }
 
 export function unregisterHooks(projectRoot: string): void {
@@ -212,7 +250,7 @@ export function unregisterHooks(projectRoot: string): void {
     const settings = JSON.parse(readFileSync(settingsFile, "utf-8"));
     if (settings.hooks) {
       delete settings.hooks;
-      writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+      writeSecureFile(settingsFile, JSON.stringify(settings, null, 2));
     }
   } catch {
     // ignore corrupt file
