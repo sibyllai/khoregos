@@ -9,7 +9,9 @@ import chalk from "chalk";
 import Table from "cli-table3";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
-import { AuditLogger } from "../engine/audit.js";
+import { AuditLogger, pruneAuditEvents } from "../engine/audit.js";
+import { loadSigningKey, verifyChain } from "../engine/signing.js";
+import { loadConfigOrDefault } from "../models/config.js";
 import type {
   AuditEvent,
   AuditSeverity,
@@ -48,6 +50,15 @@ function displayEventType(eventType: string): string {
   return EVENT_TYPE_DISPLAY[eventType] ?? eventType;
 }
 
+/** Format a millisecond delta as a human-readable short string. */
+function formatDeltaMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const min = Math.floor(ms / 60_000);
+  const sec = Math.round((ms % 60_000) / 1000);
+  return `${min}m${sec}s`;
+}
+
 function printEvent(event: AuditEvent): void {
   const agent = event.agentId ? event.agentId.slice(0, 8) : "system";
   const typeColor: Record<string, (s: string) => string> = {
@@ -81,6 +92,7 @@ export function registerAuditCommands(program: Command): void {
       "Filter by severity (info, warning, critical)",
     )
     .option("--since <duration>", "Show events since (e.g., '1h', '30m')")
+    .option("--trace-id <id>", "Filter by trace/correlation ID")
     .option("-n, --limit <number>", "Maximum events to show", "50")
     .action(
       (opts: {
@@ -89,6 +101,7 @@ export function registerAuditCommands(program: Command): void {
         type?: string;
         severity?: string;
         since?: string;
+        traceId?: string;
         limit: string;
       }) => {
         const projectRoot = process.cwd();
@@ -108,13 +121,15 @@ export function registerAuditCommands(program: Command): void {
             eventType: opts.type as EventType | undefined,
             since: opts.since ? parseDuration(opts.since) : undefined,
             severity: opts.severity as AuditSeverity | undefined,
+            traceId: opts.traceId,
           });
 
           // Build agent ID -> name map for display.
           const agents = sm.listAgents(sessionId);
           const agentNameById = new Map(agents.map((a) => [a.id, a.name]));
 
-          return { events, sessionId, agentNameById };
+          const session = sm.getSession(sessionId);
+          return { events, sessionId, agentNameById, traceId: session?.traceId };
         });
 
         if (!result || !result.events.length) {
@@ -123,11 +138,29 @@ export function registerAuditCommands(program: Command): void {
         }
 
         console.log(`${chalk.bold("Session:")} ${result.sessionId.slice(0, 8)}...`);
+        if (result.traceId) {
+          console.log(`${chalk.bold("Trace ID:")} ${result.traceId}`);
+        }
         console.log();
 
         const table = new Table({
-          head: ["Time", "Seq", "Agent", "Sev", "Type", "Action"],
+          head: ["Time", "Seq", "Delta", "Agent", "Sev", "Type", "Action"],
         });
+
+        // Compute delta (time since previous event) in sequence order.
+        // Events arrive DESC; reverse for ascending computation.
+        const ascending = [...result.events].reverse();
+        const deltaBySeq = new Map<number, string>();
+        for (let i = 0; i < ascending.length; i++) {
+          if (i === 0) {
+            deltaBySeq.set(ascending[i].sequence, "—");
+          } else {
+            const prev = new Date(ascending[i - 1].timestamp).getTime();
+            const curr = new Date(ascending[i].timestamp).getTime();
+            const ms = curr - prev;
+            deltaBySeq.set(ascending[i].sequence, formatDeltaMs(ms));
+          }
+        }
 
         const severityColor: Record<string, (s: string) => string> = {
           critical: chalk.red,
@@ -143,6 +176,7 @@ export function registerAuditCommands(program: Command): void {
           table.push([
             new Date(event.timestamp).toTimeString().slice(0, 8),
             String(event.sequence),
+            chalk.dim(deltaBySeq.get(event.sequence) ?? "—"),
             agentLabel,
             colorFn(sev.slice(0, 4)),
             displayEventType(event.eventType),
@@ -221,9 +255,10 @@ export function registerAuditCommands(program: Command): void {
     .description("Export audit trail")
     .option("-s, --session <id>", "Session ID or 'latest'", "latest")
     .option("-f, --format <format>", "Output format: json, csv", "json")
+    .option("--trace-id <id>", "Filter by trace/correlation ID")
     .option("-o, --output <file>", "Output file (stdout if not specified)")
     .action(
-      (opts: { session: string; format: string; output?: string }) => {
+      (opts: { session: string; format: string; traceId?: string; output?: string }) => {
         const projectRoot = process.cwd();
         if (!existsSync(path.join(projectRoot, ".khoregos", "k6s.db"))) {
           console.error(chalk.yellow("No audit data found."));
@@ -236,7 +271,7 @@ export function registerAuditCommands(program: Command): void {
           if (!sessionId) return [];
 
           const al = new AuditLogger(db, sessionId);
-          return al.getEvents({ limit: 10000 });
+          return al.getEvents({ limit: 10000, traceId: opts.traceId });
         });
 
         let output: string;
@@ -278,4 +313,133 @@ export function registerAuditCommands(program: Command): void {
         }
       },
     );
+
+  // -- Prune old audit data.
+  audit
+    .command("prune")
+    .description("Delete audit events older than the retention period")
+    .option(
+      "--before <date>",
+      "Delete events before this ISO date (overrides retention config)",
+    )
+    .option("--dry-run", "Show what would be deleted without deleting")
+    .action((opts: { before?: string; dryRun?: boolean }) => {
+      const projectRoot = process.cwd();
+      const configFile = path.join(projectRoot, "k6s.yaml");
+
+      let beforeDate: string;
+      if (opts.before) {
+        beforeDate = new Date(opts.before).toISOString();
+      } else {
+        const config = loadConfigOrDefault(configFile, "project");
+        const retentionDays = config.session.audit_retention_days;
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - retentionDays);
+        beforeDate = cutoff.toISOString();
+      }
+
+      const result = withDb(projectRoot, (db) => {
+        return pruneAuditEvents(db, beforeDate, opts.dryRun ?? false);
+      });
+
+      if (opts.dryRun) {
+        console.log(chalk.dim("Dry run — no data deleted."));
+        console.log(
+          `  Events that would be deleted: ${chalk.bold(String(result.eventsDeleted))}`,
+        );
+        console.log(
+          `  Sessions that would be pruned: ${chalk.bold(String(result.sessionsPruned))}`,
+        );
+      } else {
+        console.log(
+          chalk.green("✓") +
+            ` Pruned ${result.eventsDeleted} events, ${result.sessionsPruned} sessions`,
+        );
+      }
+    });
+
+  // -- Verify HMAC chain integrity.
+  audit
+    .command("verify")
+    .description("Verify audit trail HMAC chain integrity")
+    .option("-s, --session <id>", "Session ID or 'latest'", "latest")
+    .action((opts: { session: string }) => {
+      const projectRoot = process.cwd();
+      const khoregoDir = path.join(projectRoot, ".khoregos");
+
+      if (!existsSync(path.join(khoregoDir, "k6s.db"))) {
+        console.log(chalk.yellow("No audit data found."));
+        return;
+      }
+
+      const key = loadSigningKey(khoregoDir);
+      if (!key) {
+        console.log(
+          chalk.yellow("No signing key found.") +
+            " Run " +
+            chalk.bold("k6s init") +
+            " to generate one.",
+        );
+        return;
+      }
+
+      const result = withDb(projectRoot, (db) => {
+        const sm = new StateManager(db, projectRoot);
+        const sessionId = resolveSessionId(sm, opts.session);
+        if (!sessionId) return null;
+
+        // Fetch all events in sequence order (ascending).
+        const events = db
+          .fetchAll(
+            "SELECT * FROM audit_events WHERE session_id = ? ORDER BY sequence ASC",
+            [sessionId],
+          )
+          .map((row) => ({
+            id: row.id as string,
+            sequence: row.sequence as number,
+            sessionId: row.session_id as string,
+            agentId: (row.agent_id as string) ?? null,
+            timestamp: row.timestamp as string,
+            eventType: row.event_type as string,
+            action: row.action as string,
+            details: (row.details as string) ?? null,
+            filesAffected: (row.files_affected as string) ?? null,
+            gateId: (row.gate_id as string) ?? null,
+            hmac: (row.hmac as string) ?? null,
+            severity: ((row.severity as string) ?? "info") as AuditSeverity,
+          })) as AuditEvent[];
+
+        return { sessionId, verification: verifyChain(key, sessionId, events) };
+      });
+
+      if (!result) {
+        console.log(chalk.yellow("No session found."));
+        return;
+      }
+
+      const { sessionId, verification } = result;
+      console.log(`${chalk.bold("Session:")} ${sessionId.slice(0, 8)}...`);
+      console.log(
+        `${chalk.bold("Events checked:")} ${verification.eventsChecked}`,
+      );
+      console.log();
+
+      if (verification.valid) {
+        console.log(chalk.green("✓ Audit chain integrity verified."));
+      } else {
+        console.log(
+          chalk.red(`✗ ${verification.errors.length} issue(s) found:`),
+        );
+        console.log();
+        for (const err of verification.errors) {
+          const prefix =
+            err.type === "mismatch"
+              ? chalk.red("BROKEN")
+              : err.type === "gap"
+                ? chalk.yellow("GAP")
+                : chalk.yellow("UNSIGNED");
+          console.log(`  ${prefix} seq ${err.sequence}: ${err.message}`);
+        }
+      }
+    });
 }

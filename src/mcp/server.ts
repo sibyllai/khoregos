@@ -6,6 +6,7 @@
  * persistent context.
  */
 
+import path from "node:path";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -13,6 +14,7 @@ import type { Db } from "../store/db.js";
 import type { K6sConfig } from "../models/config.js";
 import { EventType } from "../models/audit.js";
 import { AuditLogger } from "../engine/audit.js";
+import { loadSigningKey } from "../engine/signing.js";
 import { BoundaryEnforcer } from "../engine/boundaries.js";
 import { FileLockManager, lockResultToDict } from "../engine/locks.js";
 import { StateManager } from "../engine/state.js";
@@ -97,8 +99,13 @@ export class K6sServer {
     private sessionId: string,
     private projectRoot: string,
   ) {
-    this.auditLogger = new AuditLogger(db, sessionId);
-    this.stateManager = new StateManager(db, projectRoot);
+    const khoregoDir = path.join(projectRoot, ".khoregos");
+    const signingKey = loadSigningKey(khoregoDir);
+    // Resolve trace_id from the session for injection into audit events.
+    const sm = new StateManager(db, projectRoot);
+    const session = sm.getSession(sessionId);
+    this.auditLogger = new AuditLogger(db, sessionId, session?.traceId, signingKey);
+    this.stateManager = sm;
     this.boundaryEnforcer = new BoundaryEnforcer(
       db,
       sessionId,
@@ -108,7 +115,7 @@ export class K6sServer {
     this.lockManager = new FileLockManager(db, sessionId);
 
     this.mcp = new McpServer(
-      { name: "khoregos", version: "0.1.0" },
+      { name: "khoregos", version: "0.3.0" },
       { capabilities: { resources: {}, tools: {} } },
     );
 

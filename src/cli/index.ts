@@ -7,6 +7,7 @@ import path from "node:path";
 import { Command } from "commander";
 import chalk from "chalk";
 import { DaemonState } from "../daemon/manager.js";
+import { generateSigningKey } from "../engine/signing.js";
 import { generateDefaultConfig, loadConfig, saveConfig } from "../models/config.js";
 import { K6sServer } from "../mcp/server.js";
 import { Db } from "../store/db.js";
@@ -15,7 +16,7 @@ import { registerSessionCommands } from "./session.js";
 import { registerAuditCommands } from "./audit.js";
 import { registerHookCommands } from "./hook.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.3.0";
 
 const program = new Command();
 
@@ -58,10 +59,14 @@ program
     saveConfig(config, configFile);
     console.log(chalk.green("✓") + ` Created k6s.yaml`);
 
+    if (generateSigningKey(khoregoDir)) {
+      console.log(chalk.green("✓") + ` Created .khoregos/signing.key`);
+    }
+
     const gitignore = path.join(khoregoDir, ".gitignore");
     writeFileSync(
       gitignore,
-      "# Ignore database and daemon state\n*.db\n*.db-*\ndaemon.*\n",
+      "# Ignore database, daemon state, and signing key\n*.db\n*.db-*\ndaemon.*\nsigning.key\n",
     );
     console.log(chalk.green("✓") + ` Created .khoregos/.gitignore`);
 

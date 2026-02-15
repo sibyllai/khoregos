@@ -2,6 +2,7 @@
  * State manager for persisting session state.
  */
 
+import { randomUUID } from "node:crypto";
 import { ulid } from "ulid";
 import type { Db } from "../store/db.js";
 import {
@@ -51,6 +52,7 @@ export class StateManager {
       gitBranch: null,
       gitSha: null,
       gitDirty: false,
+      traceId: randomUUID(),
     };
     this.db.insert("sessions", sessionToDbRow(session));
     return session;

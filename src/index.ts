@@ -13,6 +13,11 @@ export type { K6sConfig, BoundaryConfig, GateConfig } from "./models/config.js";
 export { loadConfig, saveConfig, generateDefaultConfig } from "./models/config.js";
 
 export { AuditLogger } from "./engine/audit.js";
+export {
+  generateSigningKey,
+  loadSigningKey,
+  verifyChain,
+} from "./engine/signing.js";
 export { BoundaryEnforcer } from "./engine/boundaries.js";
 export { FileLockManager } from "./engine/locks.js";
 export { StateManager } from "./engine/state.js";

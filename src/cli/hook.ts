@@ -17,6 +17,7 @@ import { DaemonState } from "../daemon/manager.js";
 import { AuditLogger } from "../engine/audit.js";
 import { StateManager } from "../engine/state.js";
 import { classifySeverity, extractPathsFromBashCommand } from "../engine/severity.js";
+import { loadSigningKey } from "../engine/signing.js";
 import { ReviewPatternMatcher } from "../watcher/fs.js";
 import { Db } from "../store/db.js";
 import type { EventType } from "../models/audit.js";
@@ -75,10 +76,12 @@ function logEvent(opts: {
   filesAffected?: string[];
   severity?: "info" | "warning" | "critical";
 }): void {
-  const db = new Db(path.join(opts.projectRoot, ".khoregos", "k6s.db"));
+  const khoregoDir = path.join(opts.projectRoot, ".khoregos");
+  const db = new Db(path.join(khoregoDir, "k6s.db"));
   db.connect();
   try {
-    const logger = new AuditLogger(db, opts.sessionId);
+    const key = loadSigningKey(khoregoDir);
+    const logger = new AuditLogger(db, opts.sessionId, null, key);
     logger.start();
     logger.log({
       eventType: opts.eventType,
@@ -145,9 +148,11 @@ export function registerHookCommands(program: Command): void {
       action = `tool_use: ${toolName.toLowerCase()} — ${filesAffected[0]}`;
     }
 
-    const db = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
+    const khoregoDir = path.join(projectRoot, ".khoregos");
+    const db = new Db(path.join(khoregoDir, "k6s.db"));
     db.connect();
     try {
+      const signingKey = loadSigningKey(khoregoDir);
       const sm = new StateManager(db, projectRoot);
       const claudeSessionId = data.session_id as string | undefined;
       let agentId: string | null = null;
@@ -199,7 +204,7 @@ export function registerHookCommands(program: Command): void {
         filesAffected: filesAffected.length ? filesAffected : undefined,
       });
 
-      const logger = new AuditLogger(db, sessionId);
+      const logger = new AuditLogger(db, sessionId, null, signingKey);
       logger.start();
       const event = logger.log({
         eventType: "tool_use",
@@ -300,9 +305,11 @@ export function registerHookCommands(program: Command): void {
     if (!Object.keys(data).length) return;
 
     // Resolve agent identity from Claude Code session ID.
-    const db = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
+    const stopKhoregoDir = path.join(projectRoot, ".khoregos");
+    const db = new Db(path.join(stopKhoregoDir, "k6s.db"));
     db.connect();
     try {
+      const stopKey = loadSigningKey(stopKhoregoDir);
       const sm = new StateManager(db, projectRoot);
       let agentId: string | null = null;
       const claudeSessionId = data.session_id as string | undefined;
@@ -315,7 +322,7 @@ export function registerHookCommands(program: Command): void {
         }
       }
 
-      const logger = new AuditLogger(db, sessionId);
+      const logger = new AuditLogger(db, sessionId, null, stopKey);
       logger.start();
       logger.log({
         eventType: "agent_complete",
