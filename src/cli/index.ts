@@ -15,8 +15,7 @@ import { registerTeamCommands } from "./team.js";
 import { registerSessionCommands } from "./session.js";
 import { registerAuditCommands } from "./audit.js";
 import { registerHookCommands } from "./hook.js";
-
-const VERSION = "0.3.0";
+import { VERSION } from "../version.js";
 
 const program = new Command();
 

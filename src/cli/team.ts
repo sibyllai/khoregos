@@ -23,8 +23,7 @@ import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
 import { type Session, type SessionState } from "../models/session.js";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
-
-const K6S_VERSION = "0.3.0";
+import { VERSION } from "../version.js";
 
 function getGitContext(projectRoot: string): {
   branch: string | null;
@@ -124,7 +123,7 @@ export function registerTeamCommands(program: Command): void {
         });
         s.operator = operator ?? null;
         s.hostname = hostname();
-        s.k6sVersion = K6S_VERSION;
+        s.k6sVersion = VERSION;
         s.claudeCodeVersion = claudeVersion;
         s.gitBranch = git.branch;
         s.gitSha = git.sha;

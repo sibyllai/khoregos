@@ -2,6 +2,7 @@
  * Khoregos — Enterprise governance layer for Claude Code Agent Teams.
  */
 
+export { VERSION } from "./version.js";
 export { Db, getDatabase, closeDatabase } from "./store/db.js";
 export { SCHEMA_VERSION } from "./store/migrations.js";
 
