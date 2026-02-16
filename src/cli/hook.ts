@@ -81,7 +81,9 @@ function logEvent(opts: {
   db.connect();
   try {
     const key = loadSigningKey(khoregoDir);
-    const logger = new AuditLogger(db, opts.sessionId, null, key);
+    const sm = new StateManager(db, opts.projectRoot);
+    const sess = sm.getSession(opts.sessionId);
+    const logger = new AuditLogger(db, opts.sessionId, sess?.traceId, key);
     logger.start();
     logger.log({
       eventType: opts.eventType,
@@ -154,6 +156,8 @@ export function registerHookCommands(program: Command): void {
     try {
       const signingKey = loadSigningKey(khoregoDir);
       const sm = new StateManager(db, projectRoot);
+      const currentSession = sm.getSession(sessionId);
+      const traceId = currentSession?.traceId ?? null;
       const claudeSessionId = data.session_id as string | undefined;
       let agentId: string | null = null;
       if (claudeSessionId) {
@@ -204,7 +208,7 @@ export function registerHookCommands(program: Command): void {
         filesAffected: filesAffected.length ? filesAffected : undefined,
       });
 
-      const logger = new AuditLogger(db, sessionId, null, signingKey);
+      const logger = new AuditLogger(db, sessionId, traceId, signingKey);
       logger.start();
       const event = logger.log({
         eventType: "tool_use",
@@ -311,6 +315,8 @@ export function registerHookCommands(program: Command): void {
     try {
       const stopKey = loadSigningKey(stopKhoregoDir);
       const sm = new StateManager(db, projectRoot);
+      const stopSession = sm.getSession(sessionId);
+      const stopTraceId = stopSession?.traceId ?? null;
       let agentId: string | null = null;
       const claudeSessionId = data.session_id as string | undefined;
       if (claudeSessionId) {
@@ -322,7 +328,7 @@ export function registerHookCommands(program: Command): void {
         }
       }
 
-      const logger = new AuditLogger(db, sessionId, null, stopKey);
+      const logger = new AuditLogger(db, sessionId, stopTraceId, stopKey);
       logger.start();
       logger.log({
         eventType: "agent_complete",
