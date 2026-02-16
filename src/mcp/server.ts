@@ -18,6 +18,7 @@ import { loadSigningKey } from "../engine/signing.js";
 import { BoundaryEnforcer } from "../engine/boundaries.js";
 import { FileLockManager, lockResultToDict } from "../engine/locks.js";
 import { StateManager } from "../engine/state.js";
+import { VERSION } from "../version.js";
 
 // Event types that agents are allowed to submit via k6s_log.
 // System-level types (session lifecycle, gate_triggered, boundary_violation,
@@ -115,7 +116,7 @@ export class K6sServer {
     this.lockManager = new FileLockManager(db, sessionId);
 
     this.mcp = new McpServer(
-      { name: "khoregos", version: "0.3.0" },
+      { name: "khoregos", version: VERSION },
       { capabilities: { resources: {}, tools: {} } },
     );
 

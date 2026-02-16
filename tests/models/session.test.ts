@@ -12,6 +12,7 @@ import {
   sessionDurationSeconds,
   type Session,
 } from "../../src/models/session.js";
+import { VERSION } from "../../src/version.js";
 
 describe("session model", () => {
   describe("SessionState", () => {
@@ -48,7 +49,7 @@ describe("session model", () => {
         metadata: null,
         operator: "alice",
         hostname: "host",
-        k6sVersion: "0.3.0",
+        k6sVersion: VERSION,
         claudeCodeVersion: null,
         gitBranch: "main",
         gitSha: "abc",
