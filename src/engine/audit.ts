@@ -15,6 +15,7 @@ import {
   auditEventToDbRow,
 } from "../models/audit.js";
 import { computeHmac, genesisValue } from "./signing.js";
+import { recordAuditEvent } from "./telemetry.js";
 
 export class AuditLogger {
   private sequence = 0;
@@ -89,6 +90,7 @@ export class AuditLogger {
     }
 
     this.db.insert("audit_events", auditEventToDbRow(event));
+    recordAuditEvent(event.eventType, event.severity);
     return event;
   }
 

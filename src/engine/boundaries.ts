@@ -13,6 +13,7 @@ import {
   boundaryViolationFromDbRow,
   boundaryViolationToDbRow,
 } from "../models/context.js";
+import { recordBoundaryViolation } from "./telemetry.js";
 
 export class BoundaryEnforcer {
   constructor(
@@ -118,6 +119,7 @@ export class BoundaryEnforcer {
     };
 
     this.db.insert("boundary_violations", boundaryViolationToDbRow(violation));
+    recordBoundaryViolation(opts.violationType);
     return violation;
   }
 

@@ -23,6 +23,17 @@ export { BoundaryEnforcer } from "./engine/boundaries.js";
 export { FileLockManager } from "./engine/locks.js";
 export { StateManager } from "./engine/state.js";
 export { EventBus } from "./engine/events.js";
+export {
+  initTelemetry,
+  shutdownTelemetry,
+  getTracer,
+  getMeter,
+  recordSessionStart,
+  recordAuditEvent,
+  recordActiveAgentDelta,
+  recordBoundaryViolation,
+  recordToolDurationSeconds,
+} from "./engine/telemetry.js";
 
 export { K6sServer } from "./mcp/server.js";
 
