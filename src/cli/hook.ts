@@ -19,6 +19,7 @@ import { StateManager } from "../engine/state.js";
 import { classifySeverity, extractPathsFromBashCommand } from "../engine/severity.js";
 import { loadSigningKey } from "../engine/signing.js";
 import {
+  initTelemetry,
   getTracer,
   recordActiveAgentDelta,
   recordToolDurationSeconds,
@@ -69,6 +70,17 @@ function truncate(obj: unknown, maxLen = 2000): unknown {
   const s = typeof obj === "string" ? obj : JSON.stringify(obj);
   if (s.length > maxLen) return s.slice(0, maxLen) + "...[truncated]";
   return obj;
+}
+
+/**
+ * Initialize OTel in hook subprocess. Hooks are short-lived processes,
+ * so the SDK must be initialized per invocation for spans/metrics to export.
+ */
+function initHookTelemetry(projectRoot: string): void {
+  const configPath = path.join(projectRoot, "k6s.yaml");
+  if (!existsSync(configPath)) return;
+  const config = loadConfigOrDefault(configPath, "project");
+  initTelemetry(config);
 }
 
 function logEvent(opts: {
@@ -225,6 +237,7 @@ export function registerHookCommands(program: Command): void {
       });
       logger.stop();
 
+      initHookTelemetry(projectRoot);
       const durationMs = typeof data.duration_ms === "number" ? data.duration_ms : undefined;
       const agentName = agentId
         ? sm.getAgent(agentId)?.name ?? "primary"
@@ -322,6 +335,7 @@ export function registerHookCommands(program: Command): void {
         },
         agentId: agent.id,
       });
+      initHookTelemetry(projectRoot);
       const tracer = getTracer();
       tracer.startActiveSpan(
         "agent.spawn",
@@ -376,6 +390,7 @@ export function registerHookCommands(program: Command): void {
         },
       });
       logger.stop();
+      initHookTelemetry(projectRoot);
       const tracer = getTracer();
       tracer.startActiveSpan("agent.stop", (span) => {
         span.end();

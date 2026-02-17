@@ -33,6 +33,7 @@ function normalizeEndpoint(endpoint: string, path: string): string {
  * Otherwise does nothing (no-op providers remain in use).
  */
 export function initTelemetry(config: K6sConfig): void {
+  if (sdk) return; // Already initialized — idempotent.
   const otel = config.observability?.opentelemetry;
   if (!otel?.enabled) return;
 
@@ -52,7 +53,10 @@ export function initTelemetry(config: K6sConfig): void {
     exportIntervalMillis: 10_000,
   });
 
-  // Cast needed: sdk-node may depend on a different sdk-metrics version (private _shutdown).
+  // Cast required: sdk-node bundles its own @opentelemetry/sdk-metrics with a
+  // separate private _shutdown declaration. This is a known OTel version skew
+  // issue. The runtime types are compatible; only the private field diverges.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sdk = new NodeSDK({
     resource,
     traceExporter,
@@ -144,6 +148,7 @@ function getToolDurationHistogram() {
       {
         description: "Tool call duration in seconds",
         unit: "s",
+        advice: { explicitBucketBoundaries: TOOL_DURATION_BUCKETS },
       },
     );
   }
