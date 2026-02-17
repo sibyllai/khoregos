@@ -18,6 +18,11 @@ import { AuditLogger } from "../engine/audit.js";
 import { StateManager } from "../engine/state.js";
 import { classifySeverity, extractPathsFromBashCommand } from "../engine/severity.js";
 import { loadSigningKey } from "../engine/signing.js";
+import {
+  getTracer,
+  recordActiveAgentDelta,
+  recordToolDurationSeconds,
+} from "../engine/telemetry.js";
 import { ReviewPatternMatcher } from "../watcher/fs.js";
 import { Db } from "../store/db.js";
 import type { EventType } from "../models/audit.js";
@@ -220,6 +225,28 @@ export function registerHookCommands(program: Command): void {
       });
       logger.stop();
 
+      const durationMs = typeof data.duration_ms === "number" ? data.duration_ms : undefined;
+      const agentName = agentId
+        ? sm.getAgent(agentId)?.name ?? "primary"
+        : "primary";
+      const tracer = getTracer();
+      tracer.startActiveSpan(
+        "tool.use",
+        {
+          attributes: {
+            "tool.name": toolName,
+            "agent.name": agentName,
+            ...(durationMs != null && { duration_ms: durationMs }),
+          },
+        },
+        (span) => {
+          span.end();
+        },
+      );
+      if (durationMs != null && durationMs >= 0) {
+        recordToolDurationSeconds(durationMs / 1000);
+      }
+
       // Sensitive-file annotation: log a sensitive_needs_review audit event when
       // write operations touch files matching configured gate patterns.
       // This is a passive audit marker — no interactive workflow.
@@ -295,6 +322,15 @@ export function registerHookCommands(program: Command): void {
         },
         agentId: agent.id,
       });
+      const tracer = getTracer();
+      tracer.startActiveSpan(
+        "agent.spawn",
+        { attributes: { "agent.name": agentName } },
+        (span) => {
+          span.end();
+        },
+      );
+      recordActiveAgentDelta(1);
     } finally {
       db.close();
     }
@@ -340,6 +376,11 @@ export function registerHookCommands(program: Command): void {
         },
       });
       logger.stop();
+      const tracer = getTracer();
+      tracer.startActiveSpan("agent.stop", (span) => {
+        span.end();
+      });
+      recordActiveAgentDelta(-1);
     } finally {
       db.close();
     }

@@ -19,6 +19,12 @@ import {
 } from "../daemon/manager.js";
 import { AuditLogger, pruneAuditEvents } from "../engine/audit.js";
 import { loadSigningKey } from "../engine/signing.js";
+import {
+  initTelemetry,
+  shutdownTelemetry,
+  getTracer,
+  recordSessionStart,
+} from "../engine/telemetry.js";
 import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
 import { type Session, type SessionState } from "../models/session.js";
 import { Db } from "../store/db.js";
@@ -106,6 +112,7 @@ export function registerTeamCommands(program: Command): void {
       }
 
       const config = loadConfig(configFile);
+      initTelemetry(config);
 
       const operator =
         process.env.USER ??
@@ -149,6 +156,22 @@ export function registerTeamCommands(program: Command): void {
           },
         });
         logger.stop();
+
+        const tracer = getTracer();
+        tracer.startActiveSpan(
+          "session.start",
+          {
+            attributes: {
+              "session.id": s.id,
+              "session.objective": s.objective,
+              operator: s.operator ?? "",
+            },
+          },
+          (span) => {
+            span.end();
+          },
+        );
+        recordSessionStart();
 
         // Auto-prune old audit data (silent, best-effort).
         const retentionDays = config.session.audit_retention_days;
@@ -210,7 +233,7 @@ export function registerTeamCommands(program: Command): void {
   team
     .command("stop")
     .description("Stop the current agent team session")
-    .action(() => {
+    .action(async () => {
       const projectRoot = process.cwd();
       const khoregoDir = path.join(projectRoot, ".khoregos");
 
@@ -223,6 +246,11 @@ export function registerTeamCommands(program: Command): void {
       const state = daemon.readState();
       const sessionId = (state.session_id as string) ?? "unknown";
 
+      const tracer = getTracer();
+      tracer.startActiveSpan("session.stop", { attributes: { "session.id": sessionId } }, (span) => {
+        span.end();
+      });
+
       withDb(projectRoot, (db) => {
         const sm = new StateManager(db, projectRoot);
         sm.markSessionCompleted(sessionId);
@@ -231,6 +259,8 @@ export function registerTeamCommands(program: Command): void {
       removeClaudeMdGovernance(projectRoot);
       unregisterHooks(projectRoot);
       daemon.removeState();
+
+      await shutdownTelemetry();
 
       console.log(chalk.green("✓") + ` Session ${sessionId.slice(0, 8)}... stopped`);
       console.log(chalk.green("✓") + " Governance removed (CLAUDE.md, hooks)");
@@ -276,6 +306,7 @@ export function registerTeamCommands(program: Command): void {
 
         const context = sm.generateResumeContext(prev.id);
         const config = loadConfig(configFile);
+        initTelemetry(config);
         const newSession = sm.createSession({
           objective: prev.objective,
           configSnapshot: JSON.stringify(sanitizeConfigForStorage(config)),
@@ -289,6 +320,23 @@ export function registerTeamCommands(program: Command): void {
         });
 
         sm.markSessionActive(newSession.id);
+
+        const tracer = getTracer();
+        tracer.startActiveSpan(
+          "session.start",
+          {
+            attributes: {
+              "session.id": newSession.id,
+              "session.objective": newSession.objective,
+              operator: prev.operator ?? "",
+            },
+          },
+          (span) => {
+            span.end();
+          },
+        );
+        recordSessionStart();
+
         return { prev, newSession };
       });
 
