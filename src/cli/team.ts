@@ -23,6 +23,7 @@ import {
   initTelemetry,
   shutdownTelemetry,
   getTracer,
+  redactEndpointForLogs,
   recordSessionStart,
 } from "../engine/telemetry.js";
 import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
@@ -90,7 +91,7 @@ export function registerTeamCommands(program: Command): void {
     .description("Start an agent team session with governance")
     .argument("<objective>", "What the team will work on")
     .option("-r, --run", "Launch Claude Code with the objective as prompt")
-    .action((objective: string, opts: { run?: boolean }) => {
+    .action(async (objective: string, opts: { run?: boolean }) => {
       const projectRoot = process.cwd();
       const configFile = path.join(projectRoot, "k6s.yaml");
       const khoregoDir = path.join(projectRoot, ".khoregos");
@@ -113,6 +114,11 @@ export function registerTeamCommands(program: Command): void {
 
       const config = loadConfig(configFile);
       initTelemetry(config);
+      if (config.observability?.opentelemetry?.enabled) {
+        const endpoint = config.observability.opentelemetry.endpoint ?? "http://localhost:4318";
+        const safeEndpoint = redactEndpointForLogs(endpoint);
+        console.log(chalk.dim(`Sending traces to ${safeEndpoint}. Ensure your OTLP collector is running.`));
+      }
 
       const operator =
         process.env.USER ??
@@ -228,6 +234,7 @@ export function registerTeamCommands(program: Command): void {
         console.log();
         console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
       }
+      await shutdownTelemetry();
     });
 
   team
@@ -270,7 +277,7 @@ export function registerTeamCommands(program: Command): void {
     .command("resume")
     .description("Resume a previous session")
     .argument("[session-id]", "Session ID to resume (defaults to latest)")
-    .action((sessionId?: string) => {
+    .action(async (sessionId?: string) => {
       const projectRoot = process.cwd();
       const configFile = path.join(projectRoot, "k6s.yaml");
       const khoregoDir = path.join(projectRoot, ".khoregos");
@@ -307,6 +314,11 @@ export function registerTeamCommands(program: Command): void {
         const context = sm.generateResumeContext(prev.id);
         const config = loadConfig(configFile);
         initTelemetry(config);
+        if (config.observability?.opentelemetry?.enabled) {
+          const endpoint = config.observability.opentelemetry.endpoint ?? "http://localhost:4318";
+          const safeEndpoint = redactEndpointForLogs(endpoint);
+          console.log(chalk.dim(`Sending traces to ${safeEndpoint}. Ensure your OTLP collector is running.`));
+        }
         const newSession = sm.createSession({
           objective: prev.objective,
           configSnapshot: JSON.stringify(sanitizeConfigForStorage(config)),
@@ -368,6 +380,7 @@ export function registerTeamCommands(program: Command): void {
       console.log("  " + chalk.cyan.bold("claude"));
       console.log();
       console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
+      await shutdownTelemetry();
     });
 
   team

@@ -8,7 +8,18 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { DaemonState } from "../daemon/manager.js";
 import { generateSigningKey } from "../engine/signing.js";
-import { generateDefaultConfig, loadConfig, saveConfig } from "../models/config.js";
+import {
+  initTelemetry,
+  shutdownTelemetry,
+  getTracer,
+  redactEndpointForLogs,
+} from "../engine/telemetry.js";
+import {
+  generateDefaultConfig,
+  K6sConfigSchema,
+  loadConfig,
+  saveConfig,
+} from "../models/config.js";
 import { K6sServer } from "../mcp/server.js";
 import { Db } from "../store/db.js";
 import { registerTeamCommands } from "./team.js";
@@ -77,6 +88,40 @@ program
     console.log(
       `  2. Run ${chalk.bold('k6s team start "your objective"')} to begin a session`,
     );
+  });
+
+// telemetry smoke
+program
+  .command("telemetry")
+  .description("OpenTelemetry diagnostics")
+  .argument("[action]", "Action: smoke")
+  .action(async (action?: string) => {
+    const cmd = action ?? "smoke";
+    if (cmd !== "smoke") {
+      console.error(chalk.red(`Unknown action: ${cmd}. Use 'smoke' to send a test trace.`));
+      process.exit(1);
+    }
+    const endpoint = process.env.K6S_OTEL_ENDPOINT ?? "http://localhost:4318";
+    const config = K6sConfigSchema.parse({
+      project: { name: "smoke" },
+      observability: {
+        opentelemetry: { enabled: true, endpoint },
+      },
+    });
+    initTelemetry(config);
+    const tracer = getTracer();
+    tracer.startActiveSpan(
+      "smoke_test",
+      { attributes: { smoke: "true" } },
+      (span) => {
+        span.end();
+      },
+    );
+    await shutdownTelemetry();
+    const safeEndpoint = redactEndpointForLogs(endpoint);
+    console.log(chalk.green("Smoke trace sent."));
+    console.log(chalk.dim(`Endpoint: ${safeEndpoint}`));
+    console.log(chalk.dim("In Jaeger, select service 'khoregos' and look for span 'smoke_test'."));
   });
 
 // status

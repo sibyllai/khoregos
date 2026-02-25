@@ -9,7 +9,7 @@
  * and writes an audit event to SQLite synchronously.
  */
 
-import { existsSync, readSync } from "node:fs";
+import { existsSync, readdirSync, readSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { loadConfigOrDefault } from "../models/config.js";
@@ -20,6 +20,7 @@ import { classifySeverity, extractPathsFromBashCommand } from "../engine/severit
 import { loadSigningKey } from "../engine/signing.js";
 import {
   initTelemetry,
+  shutdownTelemetry,
   getTracer,
   recordActiveAgentDelta,
   recordToolDurationSeconds,
@@ -58,6 +59,44 @@ function readHookInput(): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/**
+ * Resolve the project root for hook invocations. Claude Code may run hooks with
+ * cwd = workspace root (e.g. repo root) while the active session lives in a
+ * subdirectory (e.g. prototypes/13). We look in cwd, then ancestors, then
+ * immediate children so that hooks find .khoregos and k6s.yaml in the right place.
+ */
+function resolveHookProjectRoot(): string | null {
+  let dir = process.cwd();
+  const seen = new Set<string>();
+
+  // Check cwd and ancestors.
+  while (dir && !seen.has(dir)) {
+    seen.add(dir);
+    const state = new DaemonState(path.join(dir, ".khoregos"));
+    if (state.isRunning()) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  // One level of children (e.g. repo root -> prototypes/13).
+  const cwd = process.cwd();
+  try {
+    const entries = readdirSync(cwd, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const child = path.join(cwd, e.name);
+      if (seen.has(child)) continue;
+      const state = new DaemonState(path.join(child, ".khoregos"));
+      if (state.isRunning()) return child;
+    }
+  } catch {
+    // Ignore readdir errors (e.g. permission).
+  }
+
+  return null;
 }
 
 function getSessionId(projectRoot: string): string | null {
@@ -122,8 +161,9 @@ export function registerHookCommands(program: Command): void {
     .description("Claude Code hook handlers (internal)")
     .helpOption(false);
 
-  hook.command("post-tool-use").action(() => {
-    const projectRoot = process.cwd();
+  hook.command("post-tool-use").action(async () => {
+    const projectRoot = resolveHookProjectRoot();
+    if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
     if (!sessionId) return;
 
@@ -298,11 +338,13 @@ export function registerHookCommands(program: Command): void {
 
     } finally {
       db.close();
+      await shutdownTelemetry();
     }
   });
 
-  hook.command("subagent-start").action(() => {
-    const projectRoot = process.cwd();
+  hook.command("subagent-start").action(async () => {
+    const projectRoot = resolveHookProjectRoot();
+    if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
     if (!sessionId) return;
 
@@ -347,11 +389,13 @@ export function registerHookCommands(program: Command): void {
       recordActiveAgentDelta(1);
     } finally {
       db.close();
+      await shutdownTelemetry();
     }
   });
 
-  hook.command("subagent-stop").action(() => {
-    const projectRoot = process.cwd();
+  hook.command("subagent-stop").action(async () => {
+    const projectRoot = resolveHookProjectRoot();
+    if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
     if (!sessionId) return;
 
@@ -398,11 +442,13 @@ export function registerHookCommands(program: Command): void {
       recordActiveAgentDelta(-1);
     } finally {
       db.close();
+      await shutdownTelemetry();
     }
   });
 
   hook.command("session-stop").action(() => {
-    const projectRoot = process.cwd();
+    const projectRoot = resolveHookProjectRoot();
+    if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
     if (!sessionId) return;
 

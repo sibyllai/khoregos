@@ -6,6 +6,7 @@
 
 import { trace, metrics } from "@opentelemetry/api";
 import { NodeSDK } from "@opentelemetry/sdk-node";
+import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { Resource } from "@opentelemetry/resources";
@@ -26,6 +27,44 @@ const TOOL_DURATION_BUCKETS = [0.1, 0.5, 1, 5, 10, 30, 60, 300];
 function normalizeEndpoint(endpoint: string, path: string): string {
   const base = endpoint.replace(/\/$/, "");
   return base.includes("/v1/") ? base : `${base}${path}`;
+}
+
+/**
+ * Redact credential-like material from endpoint strings for safe logging.
+ * This only affects display output and never changes runtime exporter config.
+ */
+export function redactEndpointForLogs(endpoint: string): string {
+  const redactQueryParams = (url: URL): void => {
+    for (const key of Array.from(url.searchParams.keys())) {
+      const k = key.toLowerCase();
+      if (
+        k === "token" ||
+        k === "apikey" ||
+        k === "api_key" ||
+        k === "access_token" ||
+        k === "auth" ||
+        k === "authorization"
+      ) {
+        url.searchParams.set(key, "***");
+      }
+    }
+  };
+
+  try {
+    const url = new URL(endpoint);
+    if (url.username) url.username = "***";
+    if (url.password) url.password = "***";
+    redactQueryParams(url);
+    return url.toString();
+  } catch {
+    // Best-effort fallback for non-URL strings.
+    let redacted = endpoint.replace(/:\/\/([^:@/?#]+):([^@/?#]+)@/g, "://***:***@");
+    redacted = redacted.replace(
+      /([?&])(token|apikey|api_key|access_token|auth|authorization)=([^&]+)/gi,
+      "$1$2=***",
+    );
+    return redacted;
+  }
 }
 
 /**
@@ -53,27 +92,43 @@ export function initTelemetry(config: K6sConfig): void {
     exportIntervalMillis: 10_000,
   });
 
+  // SimpleSpanProcessor exports each span when it ends. This is more reliable
+  // for short-lived processes (CLI, hooks) than BatchSpanProcessor, which
+  // may not flush before process exit.
+  const spanProcessor = new SimpleSpanProcessor(traceExporter);
+
   // Cast required: sdk-node bundles its own @opentelemetry/sdk-metrics with a
   // separate private _shutdown declaration. This is a known OTel version skew
   // issue. The runtime types are compatible; only the private field diverges.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sdk = new NodeSDK({
     resource,
-    traceExporter,
+    spanProcessors: [spanProcessor],
     metricReader: metricReader as any,
   });
   sdk.start();
 }
 
+const SHUTDOWN_TIMEOUT_MS = 5000;
+
+/** Short delay before shutdown so in-flight exports (e.g. SimpleSpanProcessor) can complete. */
+const PRE_SHUTDOWN_DELAY_MS = 500;
+
 /**
  * Shutdown the OpenTelemetry SDK and flush pending exports.
  * Call after session stop (or when tearing down the process).
+ * If the Collector is unreachable, shutdown is capped at SHUTDOWN_TIMEOUT_MS
+ * so the process does not hang.
  */
 export async function shutdownTelemetry(): Promise<void> {
-  if (sdk) {
-    await sdk.shutdown();
-    sdk = null;
-  }
+  if (!sdk) return;
+  await new Promise((r) => setTimeout(r, PRE_SHUTDOWN_DELAY_MS));
+  const shutdown = sdk.shutdown();
+  const timeout = new Promise<void>((resolve) =>
+    setTimeout(resolve, SHUTDOWN_TIMEOUT_MS),
+  );
+  await Promise.race([shutdown, timeout]);
+  sdk = null;
 }
 
 /**
