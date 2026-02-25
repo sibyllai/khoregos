@@ -23,6 +23,7 @@ import {
   initTelemetry,
   shutdownTelemetry,
   getTracer,
+  redactEndpointForLogs,
   recordSessionStart,
 } from "../engine/telemetry.js";
 import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
@@ -115,7 +116,8 @@ export function registerTeamCommands(program: Command): void {
       initTelemetry(config);
       if (config.observability?.opentelemetry?.enabled) {
         const endpoint = config.observability.opentelemetry.endpoint ?? "http://localhost:4318";
-        console.log(chalk.dim(`Sending traces to ${endpoint}. Ensure your OTLP collector is running.`));
+        const safeEndpoint = redactEndpointForLogs(endpoint);
+        console.log(chalk.dim(`Sending traces to ${safeEndpoint}. Ensure your OTLP collector is running.`));
       }
 
       const operator =
@@ -314,7 +316,8 @@ export function registerTeamCommands(program: Command): void {
         initTelemetry(config);
         if (config.observability?.opentelemetry?.enabled) {
           const endpoint = config.observability.opentelemetry.endpoint ?? "http://localhost:4318";
-          console.log(chalk.dim(`Sending traces to ${endpoint}. Ensure your OTLP collector is running.`));
+          const safeEndpoint = redactEndpointForLogs(endpoint);
+          console.log(chalk.dim(`Sending traces to ${safeEndpoint}. Ensure your OTLP collector is running.`));
         }
         const newSession = sm.createSession({
           objective: prev.objective,

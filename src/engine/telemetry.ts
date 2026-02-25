@@ -30,6 +30,44 @@ function normalizeEndpoint(endpoint: string, path: string): string {
 }
 
 /**
+ * Redact credential-like material from endpoint strings for safe logging.
+ * This only affects display output and never changes runtime exporter config.
+ */
+export function redactEndpointForLogs(endpoint: string): string {
+  const redactQueryParams = (url: URL): void => {
+    for (const key of Array.from(url.searchParams.keys())) {
+      const k = key.toLowerCase();
+      if (
+        k === "token" ||
+        k === "apikey" ||
+        k === "api_key" ||
+        k === "access_token" ||
+        k === "auth" ||
+        k === "authorization"
+      ) {
+        url.searchParams.set(key, "***");
+      }
+    }
+  };
+
+  try {
+    const url = new URL(endpoint);
+    if (url.username) url.username = "***";
+    if (url.password) url.password = "***";
+    redactQueryParams(url);
+    return url.toString();
+  } catch {
+    // Best-effort fallback for non-URL strings.
+    let redacted = endpoint.replace(/:\/\/([^:@/?#]+):([^@/?#]+)@/g, "://***:***@");
+    redacted = redacted.replace(
+      /([?&])(token|apikey|api_key|access_token|auth|authorization)=([^&]+)/gi,
+      "$1$2=***",
+    );
+    return redacted;
+  }
+}
+
+/**
  * Initialize OpenTelemetry SDK when config has observability.opentelemetry.enabled.
  * Otherwise does nothing (no-op providers remain in use).
  */

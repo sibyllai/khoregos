@@ -9,6 +9,7 @@ import {
   shutdownTelemetry,
   getTracer,
   getMeter,
+  redactEndpointForLogs,
   recordSessionStart,
   recordAuditEvent,
   recordActiveAgentDelta,
@@ -102,6 +103,29 @@ describe("telemetry", () => {
   describe("shutdownTelemetry", () => {
     it("resolves when SDK was never started", async () => {
       await shutdownTelemetry();
+    });
+  });
+
+  describe("redactEndpointForLogs", () => {
+    it("redacts userinfo credentials in URL", () => {
+      const redacted = redactEndpointForLogs("https://alice:secret@otel.example.com/v1/traces");
+      expect(redacted).toContain("https://***:***@otel.example.com");
+      expect(redacted).not.toContain("secret");
+    });
+
+    it("redacts common secret query params", () => {
+      const redacted = redactEndpointForLogs("https://otel.example.com/v1/traces?api_key=abc123&env=prod");
+      expect(redacted).toContain("api_key=***");
+      expect(redacted).toContain("env=prod");
+      expect(redacted).not.toContain("abc123");
+    });
+
+    it("falls back gracefully for non-url strings", () => {
+      const redacted = redactEndpointForLogs("grpc://alice:secret@collector.internal?token=abc");
+      expect(redacted).toContain("grpc://***:***@collector.internal");
+      expect(redacted).toContain("token=***");
+      expect(redacted).not.toContain("secret");
+      expect(redacted).not.toContain("abc");
     });
   });
 });

@@ -8,7 +8,12 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { DaemonState } from "../daemon/manager.js";
 import { generateSigningKey } from "../engine/signing.js";
-import { initTelemetry, shutdownTelemetry, getTracer } from "../engine/telemetry.js";
+import {
+  initTelemetry,
+  shutdownTelemetry,
+  getTracer,
+  redactEndpointForLogs,
+} from "../engine/telemetry.js";
 import {
   generateDefaultConfig,
   K6sConfigSchema,
@@ -113,8 +118,9 @@ program
       },
     );
     await shutdownTelemetry();
+    const safeEndpoint = redactEndpointForLogs(endpoint);
     console.log(chalk.green("Smoke trace sent."));
-    console.log(chalk.dim(`Endpoint: ${endpoint}`));
+    console.log(chalk.dim(`Endpoint: ${safeEndpoint}`));
     console.log(chalk.dim("In Jaeger, select service 'khoregos' and look for span 'smoke_test'."));
   });
 
