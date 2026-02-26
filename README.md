@@ -2,7 +2,7 @@
 
 Khoregos (`k6s`) is a governance layer for Claude Code Agent Teams. It gives organizations durable auditability, operational controls, and evidence trails for AI-assisted development.
 
-<img width="1680" height="720" alt="_doh_A_single_figure_of_a_Khoregos_chorus_leaderpatron_in_prof_00e75294-b389-4698-9ead-7a87295a4630_2" src="https://github.com/user-attachments/assets/ba947355-d7bd-43d7-9bfe-e23b6a4ffb63" />
+<img width="1680" height="720" alt="a_single_figure_of_a_Khoregos_chorus_leaderpatron" src="https://github.com/user-attachments/assets/ba947355-d7bd-43d7-9bfe-e23b6a4ffb63" />
 
 ## Why Khoregos now
 
