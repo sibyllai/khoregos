@@ -527,6 +527,21 @@ export function registerHookCommands(program: Command): void {
 
     const data = readHookInput();
 
+    // Check whether the k6s session should end when Claude exits.
+    const configPath = path.join(projectRoot, "k6s.yaml");
+    const config = loadConfigOrDefault(configPath, "project");
+    if (!config.session.end_on_claude_exit) {
+      logEvent({
+        projectRoot,
+        sessionId,
+        eventType: "session_complete",
+        action: "claude code session ended (k6s session kept alive)",
+        details: { session_id: data.session_id, end_on_claude_exit: false },
+        severity: "info",
+      });
+      return;
+    }
+
     logEvent({
       projectRoot,
       sessionId,
@@ -535,7 +550,7 @@ export function registerHookCommands(program: Command): void {
       details: { session_id: data.session_id },
     });
 
-    // Mark session as completed
+    // Mark session as completed.
     const db = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
     db.connect();
     try {
@@ -545,7 +560,7 @@ export function registerHookCommands(program: Command): void {
       db.close();
     }
 
-    // Remove daemon state
+    // Remove daemon state.
     const daemonState = new DaemonState(path.join(projectRoot, ".khoregos"));
     daemonState.removeState();
   });
