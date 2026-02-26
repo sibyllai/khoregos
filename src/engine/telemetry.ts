@@ -9,9 +9,14 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
+import { PrometheusExporter } from "@opentelemetry/exporter-prometheus";
 import { Resource } from "@opentelemetry/resources";
 import { SEMRESATTRS_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
-import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
+import {
+  MeterProvider,
+  PeriodicExportingMetricReader,
+  type MetricReader,
+} from "@opentelemetry/sdk-metrics";
 import type { K6sConfig } from "../models/config.js";
 import { VERSION } from "../version.js";
 
@@ -20,6 +25,8 @@ const TRACER_NAME = "khoregos";
 const METER_NAME = "khoregos";
 
 let sdk: NodeSDK | null = null;
+let meterProvider: MeterProvider | null = null;
+let prometheusExporter: PrometheusExporter | null = null;
 
 /** Histogram buckets for tool duration in seconds (0.1, 0.5, 1, 5, 10, 30, 60, 300). */
 const TOOL_DURATION_BUCKETS = [0.1, 0.5, 1, 5, 10, 30, 60, 300];
@@ -27,6 +34,10 @@ const TOOL_DURATION_BUCKETS = [0.1, 0.5, 1, 5, 10, 30, 60, 300];
 function normalizeEndpoint(endpoint: string, path: string): string {
   const base = endpoint.replace(/\/$/, "");
   return base.includes("/v1/") ? base : `${base}${path}`;
+}
+
+function isHookCommandProcess(): boolean {
+  return process.argv[2] === "hook";
 }
 
 /**
@@ -72,9 +83,13 @@ export function redactEndpointForLogs(endpoint: string): string {
  * Otherwise does nothing (no-op providers remain in use).
  */
 export function initTelemetry(config: K6sConfig): void {
-  if (sdk) return; // Already initialized — idempotent.
+  if (sdk || meterProvider) return; // Already initialized — idempotent.
   const otel = config.observability?.opentelemetry;
-  if (!otel?.enabled) return;
+  const prometheus = config.observability?.prometheus;
+
+  const isOtelEnabled = otel?.enabled === true;
+  const isPrometheusEnabled = prometheus?.enabled === true;
+  if (!isOtelEnabled && !isPrometheusEnabled) return;
 
   const endpoint = otel.endpoint ?? "http://localhost:4318";
   const tracesUrl = normalizeEndpoint(endpoint, "/v1/traces");
@@ -85,26 +100,69 @@ export function initTelemetry(config: K6sConfig): void {
     "service.version": VERSION,
   });
 
-  const traceExporter = new OTLPTraceExporter({ url: tracesUrl });
-  const metricExporter = new OTLPMetricExporter({ url: metricsUrl });
-  const metricReader = new PeriodicExportingMetricReader({
-    exporter: metricExporter,
-    exportIntervalMillis: 10_000,
-  });
+  const metricReaders: MetricReader[] = [];
+  if (isOtelEnabled) {
+    const metricExporter = new OTLPMetricExporter({ url: metricsUrl });
+    const metricReader = new PeriodicExportingMetricReader({
+      exporter: metricExporter,
+      exportIntervalMillis: 10_000,
+    });
+    metricReaders.push(metricReader);
+  }
+
+  // Hook subprocesses are short-lived and should not attempt to bind a
+  // long-lived Prometheus listener port on every hook invocation.
+  if (isPrometheusEnabled && !isHookCommandProcess()) {
+    const port = prometheus.port ?? 9090;
+    const exporter = new PrometheusExporter(
+      { port, preventServerStart: false },
+      (error) => {
+        if (!error) return;
+        const err = error as NodeJS.ErrnoException;
+        if (err.code === "EADDRINUSE") {
+          console.error(
+            `Warning: Prometheus metrics port ${port} is already in use. Metrics endpoint disabled.`,
+          );
+          return;
+        }
+        console.error(
+          `Warning: Failed to start Prometheus metrics endpoint on port ${port}: ${err.message}.`,
+        );
+      },
+    );
+    prometheusExporter = exporter;
+
+    // Cast required: exporter-prometheus can depend on a different OTel metrics
+    // package version than sdk-node/sdk-metrics in this repo. Runtime behavior
+    // is compatible; only private class fields differ across package copies.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    metricReaders.push(exporter as any);
+  }
+
+  if (metricReaders.length > 0) {
+    // Cast required: NodeSDK and SDK metrics can carry parallel OTel package
+    // copies with diverging private fields, but they are runtime-compatible.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    meterProvider = new MeterProvider({ resource, readers: metricReaders as any });
+    metrics.setGlobalMeterProvider(meterProvider);
+  }
+
+  if (!isOtelEnabled) return;
 
   // SimpleSpanProcessor exports each span when it ends. This is more reliable
   // for short-lived processes (CLI, hooks) than BatchSpanProcessor, which
   // may not flush before process exit.
+  const traceExporter = new OTLPTraceExporter({ url: tracesUrl });
   const spanProcessor = new SimpleSpanProcessor(traceExporter);
 
-  // Cast required: sdk-node bundles its own @opentelemetry/sdk-metrics with a
-  // separate private _shutdown declaration. This is a known OTel version skew
-  // issue. The runtime types are compatible; only the private field diverges.
+  // Cast required: sdk-node can resolve a different internal copy of
+  // sdk-trace-base than this direct import, causing private-field type skew.
+  // Runtime behavior is compatible even when TypeScript sees distinct classes.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sdk = new NodeSDK({
     resource,
-    spanProcessors: [spanProcessor],
-    metricReader: metricReader as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    spanProcessors: [spanProcessor as any],
   });
   sdk.start();
 }
@@ -121,14 +179,40 @@ const PRE_SHUTDOWN_DELAY_MS = 500;
  * so the process does not hang.
  */
 export async function shutdownTelemetry(): Promise<void> {
-  if (!sdk) return;
-  await new Promise((r) => setTimeout(r, PRE_SHUTDOWN_DELAY_MS));
-  const shutdown = sdk.shutdown();
-  const timeout = new Promise<void>((resolve) =>
-    setTimeout(resolve, SHUTDOWN_TIMEOUT_MS),
-  );
-  await Promise.race([shutdown, timeout]);
-  sdk = null;
+  if (!sdk && !meterProvider) {
+    sessionsTotalCounter = null;
+    auditEventsTotalCounter = null;
+    activeAgentsUpDown = null;
+    boundaryViolationsCounter = null;
+    toolDurationHistogram = null;
+    return;
+  }
+
+  if (sdk) {
+    await new Promise((r) => setTimeout(r, PRE_SHUTDOWN_DELAY_MS));
+    const shutdown = sdk.shutdown();
+    const timeout = new Promise<void>((resolve) =>
+      setTimeout(resolve, SHUTDOWN_TIMEOUT_MS),
+    );
+    await Promise.race([shutdown, timeout]);
+    sdk = null;
+  }
+
+  if (meterProvider) {
+    const shutdown = meterProvider.shutdown();
+    const timeout = new Promise<void>((resolve) =>
+      setTimeout(resolve, SHUTDOWN_TIMEOUT_MS),
+    );
+    await Promise.race([shutdown, timeout]);
+    meterProvider = null;
+    prometheusExporter = null;
+  }
+
+  sessionsTotalCounter = null;
+  auditEventsTotalCounter = null;
+  activeAgentsUpDown = null;
+  boundaryViolationsCounter = null;
+  toolDurationHistogram = null;
 }
 
 /**
@@ -211,13 +295,15 @@ function getToolDurationHistogram() {
 }
 
 /** Record that a session was started (increment k6s_sessions_total). */
-export function recordSessionStart(): void {
-  getSessionsTotalCounter().add(1);
+export function recordSessionStart(amount = 1): void {
+  if (amount <= 0) return;
+  getSessionsTotalCounter().add(amount);
 }
 
 /** Record an audit event (increment k6s_audit_events_total with event_type and severity). */
-export function recordAuditEvent(eventType: string, severity: string): void {
-  getAuditEventsTotalCounter().add(1, { event_type: eventType, severity });
+export function recordAuditEvent(eventType: string, severity: string, amount = 1): void {
+  if (amount <= 0) return;
+  getAuditEventsTotalCounter().add(amount, { event_type: eventType, severity });
 }
 
 /** Add or subtract active agents (e.g. +1 on subagent-start, -1 on subagent-stop). */
@@ -226,8 +312,9 @@ export function recordActiveAgentDelta(delta: number): void {
 }
 
 /** Record a boundary violation (increment k6s_boundary_violations_total). */
-export function recordBoundaryViolation(violationType: string): void {
-  getBoundaryViolationsCounter().add(1, { violation_type: violationType });
+export function recordBoundaryViolation(violationType: string, amount = 1): void {
+  if (amount <= 0) return;
+  getBoundaryViolationsCounter().add(amount, { violation_type: violationType });
 }
 
 /** Record a tool call duration in seconds (k6s_tool_duration_seconds histogram). */

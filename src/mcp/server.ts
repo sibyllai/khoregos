@@ -251,6 +251,19 @@ export class K6sServer {
 
         const [allowed, reason] = this.boundaryEnforcer.checkPathAllowed(args.path, args.agent_name);
         if (!allowed) {
+          this.auditLogger.log({
+            eventType: "boundary_violation",
+            action: `Boundary violation: lock acquire denied for ${args.path}`,
+            agentId: agent.id,
+            filesAffected: [args.path],
+            details: {
+              reason,
+              operation: "lock_acquire",
+              violation_type: "forbidden_path",
+              enforcement_action: "blocked",
+            },
+            severity: "warning",
+          });
           this.boundaryEnforcer.recordViolation({
             filePath: args.path,
             agentId: agent.id,
@@ -293,6 +306,19 @@ export class K6sServer {
 
         const [allowed, reason] = this.boundaryEnforcer.checkPathAllowed(args.path, args.agent_name);
         if (!allowed) {
+          this.auditLogger.log({
+            eventType: "boundary_violation",
+            action: `Boundary violation: lock release denied for ${args.path}`,
+            agentId,
+            filesAffected: [args.path],
+            details: {
+              reason,
+              operation: "lock_release",
+              violation_type: "forbidden_path",
+              enforcement_action: "blocked",
+            },
+            severity: "warning",
+          });
           this.boundaryEnforcer.recordViolation({
             filePath: args.path,
             agentId,

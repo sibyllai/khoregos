@@ -3,7 +3,9 @@
  * getTracer/getMeter, and record* functions.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { createServer } from "node:net";
+import { get } from "node:http";
 import {
   initTelemetry,
   shutdownTelemetry,
@@ -33,6 +35,68 @@ function config(overrides: Partial<K6sConfig["observability"]> = {}): K6sConfig 
     },
     plugins: [],
   };
+}
+
+async function getFreePort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Failed to resolve ephemeral port.")));
+        return;
+      }
+      const port = address.port;
+      server.close((closeErr) => {
+        if (closeErr) {
+          reject(closeErr);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+async function httpGet(url: string): Promise<{ status: number; body: string }> {
+  return await new Promise((resolve, reject) => {
+    const req = get(url, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      res.on("end", () => {
+        resolve({
+          status: res.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString("utf-8"),
+        });
+      });
+    });
+    req.on("error", reject);
+  });
+}
+
+async function waitForMetricEndpoint(
+  url: string,
+  timeoutMs = 4000,
+): Promise<{ status: number; body: string }> {
+  const startedAt = Date.now();
+  let lastErr: unknown = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const res = await httpGet(url);
+      if (res.status === 200) return res;
+    } catch (err) {
+      lastErr = err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Metrics endpoint did not become ready in ${timeoutMs}ms: ${String(lastErr)}`);
+}
+
+async function loadFreshTelemetry() {
+  vi.resetModules();
+  return await import("../../src/engine/telemetry.js");
 }
 
 describe("telemetry", () => {
@@ -103,6 +167,49 @@ describe("telemetry", () => {
   describe("shutdownTelemetry", () => {
     it("resolves when SDK was never started", async () => {
       await shutdownTelemetry();
+    });
+  });
+
+  describe("prometheus exporter", () => {
+    it("serves expected metrics when prometheus is enabled without OTLP", async () => {
+      const telemetry = await loadFreshTelemetry();
+      const port = await getFreePort();
+      telemetry.initTelemetry(
+        config({
+          prometheus: { enabled: true, port },
+          opentelemetry: { enabled: false, endpoint: "http://localhost:4318" },
+        }),
+      );
+      telemetry.recordSessionStart();
+      telemetry.recordAuditEvent("tool_use", "info");
+      telemetry.recordActiveAgentDelta(1);
+      telemetry.recordBoundaryViolation("forbidden_path");
+      telemetry.recordToolDurationSeconds(0.42);
+      const meter = telemetry.getMeter();
+      const smokeCounter = meter.createCounter("k6s_prometheus_test_total", {
+        description: "Prometheus smoke test counter",
+      });
+      smokeCounter.add(1);
+
+      const res = await waitForMetricEndpoint(`http://127.0.0.1:${port}/metrics`);
+      expect(res.status).toBe(200);
+      expect(res.body).toContain("target_info");
+      await telemetry.shutdownTelemetry();
+    });
+
+    it("stops serving metrics after shutdownTelemetry", async () => {
+      const telemetry = await loadFreshTelemetry();
+      const port = await getFreePort();
+      telemetry.initTelemetry(
+        config({
+          prometheus: { enabled: true, port },
+          opentelemetry: { enabled: false, endpoint: "http://localhost:4318" },
+        }),
+      );
+      await waitForMetricEndpoint(`http://127.0.0.1:${port}/metrics`);
+      await telemetry.shutdownTelemetry();
+
+      await expect(httpGet(`http://127.0.0.1:${port}/metrics`)).rejects.toBeDefined();
     });
   });
 

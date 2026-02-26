@@ -111,6 +111,70 @@ function truncate(obj: unknown, maxLen = 2000): unknown {
   return obj;
 }
 
+export function parseTimestampMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    // Treat large values as milliseconds, otherwise as seconds.
+    return value > 1_000_000_000_000 ? value : value * 1000;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+export function extractDurationMs(data: Record<string, unknown>): number | undefined {
+  const numericCandidates = [
+    data.duration_ms,
+    data.durationMs,
+    data.elapsed_ms,
+    data.elapsedMs,
+    (data.timing as Record<string, unknown> | undefined)?.duration_ms,
+    (data.timing as Record<string, unknown> | undefined)?.durationMs,
+    (data.timing as Record<string, unknown> | undefined)?.elapsed_ms,
+    (data.timing as Record<string, unknown> | undefined)?.elapsedMs,
+  ];
+
+  for (const candidate of numericCandidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
+      return candidate;
+    }
+  }
+
+  const startCandidates = [
+    data.started_at,
+    data.start_time,
+    data.startTime,
+    (data.timing as Record<string, unknown> | undefined)?.started_at,
+    (data.timing as Record<string, unknown> | undefined)?.start_time,
+    (data.timing as Record<string, unknown> | undefined)?.startTime,
+  ];
+  const endCandidates = [
+    data.ended_at,
+    data.finished_at,
+    data.end_time,
+    data.endTime,
+    data.timestamp,
+    (data.timing as Record<string, unknown> | undefined)?.ended_at,
+    (data.timing as Record<string, unknown> | undefined)?.finished_at,
+    (data.timing as Record<string, unknown> | undefined)?.end_time,
+    (data.timing as Record<string, unknown> | undefined)?.endTime,
+    (data.timing as Record<string, unknown> | undefined)?.timestamp,
+  ];
+
+  const startMs = startCandidates
+    .map(parseTimestampMs)
+    .find((v): v is number => v != null);
+  const endMs = endCandidates
+    .map(parseTimestampMs)
+    .find((v): v is number => v != null);
+
+  if (startMs == null || endMs == null) return undefined;
+  const duration = endMs - startMs;
+  if (!Number.isFinite(duration) || duration < 0) return undefined;
+  return duration;
+}
+
 /**
  * Initialize OTel in hook subprocess. Hooks are short-lived processes,
  * so the SDK must be initialized per invocation for spans/metrics to export.
@@ -246,6 +310,10 @@ export function registerHookCommands(program: Command): void {
         session_id: data.session_id,
         tool_use_id: data.tool_use_id,
       };
+      const durationMs = extractDurationMs(data);
+      if (durationMs != null && durationMs >= 0) {
+        details.duration_ms = durationMs;
+      }
       const toolOutputStr =
         toolResponse != null
           ? typeof toolResponse === "string"
@@ -278,7 +346,6 @@ export function registerHookCommands(program: Command): void {
       logger.stop();
 
       initHookTelemetry(projectRoot);
-      const durationMs = typeof data.duration_ms === "number" ? data.duration_ms : undefined;
       const agentName = agentId
         ? sm.getAgent(agentId)?.name ?? "primary"
         : "primary";

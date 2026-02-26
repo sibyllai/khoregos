@@ -35,6 +35,18 @@ describe("Db", () => {
       );
       expect(row?.v).toBe(db.schemaVersion);
     });
+
+    it("allows connect to be called repeatedly", () => {
+      expect(() => db.connect()).not.toThrow();
+      const row = db.fetchOne("SELECT 1 as v");
+      expect(row?.v).toBe(1);
+    });
+
+    it("reconnects lazily after close on first query", () => {
+      db.close();
+      const row = db.fetchOne("SELECT 2 as v");
+      expect(row?.v).toBe(2);
+    });
   });
 
   describe("insert", () => {
