@@ -1,5 +1,5 @@
-# k6s.yaml — Khoregos Project Governance Configuration
-# This file configures boundaries, gates, and observability for your project.
+# k6s.yaml — Khoregos project governance configuration.
+# This file configures sessions, boundaries, gates, and observability for your project.
 # Copy to k6s.yaml and customize for your needs.
 
 version: "1"
@@ -8,16 +8,20 @@ project:
   name: "my-project"
   description: "Project governed by Khoregos"
 
-# Session defaults
+# Session defaults.
 session:
-  default_budget_usd: 50.00          # Per-session budget limit
-  context_retention_days: 90          # How long to keep context
-  audit_retention_days: 365           # How long to keep audit logs
+  context_retention_days: 90          # How long to keep saved context entries.
+  audit_retention_days: 365           # How long to keep audit events before auto-pruning.
+  # When a Claude Code session ends (or is killed), the k6s session is
+  # automatically completed and cleaned up. Set to false to keep the k6s
+  # session alive across multiple Claude invocations; you will then need
+  # to run `k6s team stop` explicitly to end it.
+  end_on_claude_exit: true
 
-# Agent boundary definitions
-# Boundaries restrict which files agents can modify
+# Agent boundary definitions.
+# Boundaries restrict which files agents can modify.
 boundaries:
-  # Frontend agents can only modify frontend code
+  # Frontend agents can only modify frontend code.
   - pattern: "frontend-*"
     allowed_paths:
       - "src/frontend/**"
@@ -27,10 +31,9 @@ boundaries:
     forbidden_paths:
       - ".env*"
       - "src/backend/auth/**"
-    enforcement: advisory              # advisory | strict
-    max_cost_per_hour: 5.00
+    enforcement: advisory              # "advisory" logs violations; "strict" reverts them.
 
-  # Backend agents
+  # Backend agents stay in backend code.
   - pattern: "backend-*"
     allowed_paths:
       - "src/backend/**"
@@ -41,7 +44,7 @@ boundaries:
       - "infrastructure/**"
     enforcement: advisory
 
-  # Default for all other agents
+  # Catch-all: every agent is blocked from secrets and keys.
   - pattern: "*"
     forbidden_paths:
       - ".env*"
@@ -51,8 +54,8 @@ boundaries:
       - "**/secrets/**"
     enforcement: advisory
 
-# Gate rules (Phase 2 - will be enabled later)
-# Gates require human approval before certain actions
+# Gate rules.
+# Gates flag sensitive operations for human review via audit annotations.
 gates:
   - id: dependency-approval
     name: "New Dependency Approval"
@@ -83,14 +86,7 @@ gates:
     approval_mode: manual
     notify: ["terminal"]
 
-  - id: cost-threshold
-    name: "Cost Budget Alert"
-    trigger:
-      cost_threshold: 25.00            # Alert at 50% of default budget
-    approval_mode: manual
-    notify: ["terminal"]
-
-# Observability configuration (Phase 3)
+# Observability configuration.
 observability:
   prometheus:
     enabled: false
@@ -102,12 +98,12 @@ observability:
     # Example webhook configuration:
     # - url: "https://hooks.slack.com/services/..."
     #   events: ["gate.triggered", "session.completed"]
-    #   secret: "${K6S_WEBHOOK_SECRET}"
+    #   secret: "$K6S_WEBHOOK_SECRET"
 
-# Plugin configuration (Phase 4)
+# Plugin configuration (roadmap).
 plugins: []
   # Example plugin configuration:
   # - name: "stegano"
-  #   module: "k6s_plugin_stegano"
+  #   module: "k6s-plugin-stegano"
   #   config:
   #     api_url: "https://api.stegano.ai"
