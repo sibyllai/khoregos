@@ -1,243 +1,108 @@
 # Khoregos
 
-**Enterprise governance layer for Claude Code Agent Teams**
+Khoregos (`k6s`) is a governance layer for Claude Code Agent Teams. It gives organizations durable auditability, operational controls, and evidence trails for AI-assisted development.
 
-Khoregos (k6s) provides audit trails, session persistence, and agent boundaries for Claude Code's native Agent Teams feature.
+## Why Khoregos now
 
-## Philosophy
+At the age of AI coding and vibe coding, teams can ship faster than ever, but speed without governance becomes legal and operational risk.
 
-Khoregos is designed around three principles:
+- AI-generated changes can be difficult to attribute without a reliable session and agent trail.
+- Security-sensitive files can be touched quickly without clear review evidence.
+- Legal, compliance, and internal audit teams need verifiable records, not screenshots or ad hoc logs.
+- Governance must work with AI tooling, not by patching it or breaking developer flow.
 
-1. **Non-invasive**: Never patches or monkey-patches Claude Code internals.
-2. **Durable**: Uses stable interfaces (MCP, filesystem) that won't break on Claude Code updates.
-3. **Graceful degradation**: If Khoregos is down, agents still work (just without governance).
+Khoregos is built for this gap: structured, signed, queryable evidence for what happened, who did it, and when.
 
-## Features
+## What it provides today
 
-### Audit trail
+- **Audit trail.** Append-only session events with agent attribution, severity, and export options.
+- **Session governance.** Start, stop, and resume governed agent sessions with preserved context.
+- **Boundary controls.** Allowed/forbidden path rules with violation tracking.
+- **Collaboration safety.** File lock primitives to reduce multi-agent edit collisions.
+- **Sensitive change annotations.** Gate-style markers for files that need human review.
+- **Observability.** OpenTelemetry support and Prometheus metrics endpoint.
+- **MCP integration.** Native governance tools exposed through MCP, with automatic project wiring.
 
-Every file change, decision, and action is logged with timestamps, agent attribution, and severity classification (`info`, `warning`, `critical`). Filterable, exportable (JSON/CSV), and live-streamable.
+## Quick start
 
-### Session persistence
-
-Stop work, resume later with full context preserved. Sessions capture the objective, operator identity, git context (branch, SHA, dirty state), and all agent activity.
-
-### Agent boundaries
-
-Define which files each agent can modify via glob patterns in `k6s.yaml`. Advisory mode (logged) by default; strict enforcement planned for Phase 4.
-
-### File locks
-
-Prevent multiple agents from editing the same file simultaneously via `k6s_acquire_lock` / `k6s_release_lock` MCP tools.
-
-### Sensitive-file annotations
-
-Configurable file patterns in `k6s.yaml` flag audit events when sensitive files are modified (e.g., `package.json`, `.env*`, `**/auth/**`). These appear as `sensitive_needs_review` events in the audit trail.
-
-The `sensitive_needs_review` label is intentional: compliance frameworks such as SOC 2 (CC6.1 change management), ISO 27001 (A.8.32 change management), and HIPAA (164.312(e) integrity controls) require evidence that changes to security-sensitive areas were reviewed by a human. These audit annotations surface exactly which files need post-hoc human review during the commit or pull request stage, without imposing an interactive approval workflow at agent runtime.
-
-### MCP integration
-
-Agents use governance tools via standard MCP protocol. No special agent modifications required — governance instructions are injected into `CLAUDE.md` automatically.
-
-## Installation
+1. **Install Khoregos once on your machine.**
 
 ```bash
 cd khoregos
 npm install
 npm run build
-```
-
-Link the CLI globally (optional):
-
-```bash
 npm link
 ```
 
-## Quick start
-
-### 1. Initialize your project
+2. **Initialize governance in your project.**
 
 ```bash
-cd your-project
+cd /path/to/your-project
 k6s init
 ```
 
-This creates:
-
-- `k6s.yaml` — configuration for boundaries and sensitive-file rules.
-- `.khoregos/` — directory for database and runtime state.
-
-### 2. Start an agent team session
+3. **Start a governed Claude work session.**
 
 ```bash
-k6s team start "Implement user authentication with OAuth2"
+k6s team start "build feature x with governance"
+claude "implement feature x"
 ```
 
-This:
-
-- Creates a new session in the database with operator/git context.
-- Injects governance rules into `CLAUDE.md`.
-- Registers the MCP server and hooks in `.claude/settings.json`.
-
-### 3. Work with agents
-
-Agents will automatically see governance instructions and can use MCP tools:
-
-- `k6s_log` — log actions to audit trail.
-- `k6s_save_context` / `k6s_load_context` — persistent context.
-- `k6s_acquire_lock` / `k6s_release_lock` — file locks.
-- `k6s_get_boundaries` / `k6s_check_path` — boundary awareness.
-- `k6s_task_update` — task state tracking.
-
-### 4. View audit trail
+Or launch Claude directly from Khoregos:
 
 ```bash
-k6s audit show                      # Latest session events
-k6s audit show --severity critical  # Security-relevant events only
-k6s audit tail                      # Live stream
-k6s audit export --format json      # Export for analysis
+k6s team start --run "implement feature x"
 ```
 
-### 5. Resume later
+4. **Inspect what happened and export evidence.**
 
 ```bash
+k6s audit show
+k6s audit show --severity critical
+k6s audit export --format json
+```
+
+5. **Optionally plug observability tooling.**
+
+If you enable observability settings in `k6s.yaml`, Khoregos can emit OpenTelemetry data and expose a Prometheus metrics endpoint for dashboards and alerting.
+
+6. **Stop or resume when your team pauses work.**
+
+```bash
+k6s team stop
 k6s team resume
 ```
 
-## CLI reference
+## What you can configure in k6s.yaml
 
-```
-k6s
-├── init                                # Initialize project
-├── team
-│   ├── start <objective> [--run]       # Start agent team with governance
-│   ├── stop                            # Stop team, capture state
-│   ├── resume [session-id]             # Resume previous session
-│   ├── status                          # Current team status
-│   └── history                         # List past sessions
-├── audit
-│   ├── show [--session] [--agent] [--type] [--severity] [--since]
-│   ├── export [--format json|csv] [--output <file>]
-│   └── tail [--no-follow]              # Live stream
-├── session
-│   ├── list                            # All sessions
-│   ├── show <id>                       # Session details
-│   ├── latest                          # Most recent session
-│   ├── context <id>                    # View saved context
-│   └── delete <id>                     # Delete session
-├── status                              # Current status
-├── mcp serve                           # Start MCP server (internal)
-└── version                             # Show version
-```
+- **Project metadata.** Project identity and session defaults.
+- **Session retention.** Context and audit retention windows.
+- **Boundaries.** Per-agent allowed and forbidden path patterns with enforcement mode.
+- **Gates and sensitive patterns.** File pattern triggers that generate review-oriented audit annotations.
+- **Observability.** OpenTelemetry endpoint settings and Prometheus endpoint settings.
+- **Webhooks.** Event-driven outbound notifications for governance workflows.
 
-## Configuration
+## Why this matters for legal and compliance teams
 
-Edit `k6s.yaml` to configure boundaries and sensitive-file audit rules:
+Khoregos is designed to make AI development reviewable and defensible.
 
-```yaml
-version: "1"
+- It produces machine-readable evidence that can be retained, filtered, and exported.
+- It supports post-hoc control workflows where regulatory review is required.
+- It aligns with roadmap items aimed at legislation-ready reporting for audit and compliance programs.
 
-project:
-  name: "my-project"
+## Roadmap snapshot
 
-session:
-  context_retention_days: 90
-  audit_retention_days: 365
+Upcoming and next-phase priorities:
 
-boundaries:
-  - pattern: "frontend-*"
-    allowed_paths:
-      - "src/frontend/**"
-      - "src/shared/**"
-    forbidden_paths:
-      - ".env*"
-      - "src/backend/**"
-    enforcement: advisory
+- **Phase 4.** Strict enforcement, plugin architecture, and stronger supply-chain controls.
+- **Phase 5.** Compliance-ready reporting workflows, standards-oriented report generation, and checkpoint tooling.
+- **Phase 6.** Enterprise platform capabilities such as RBAC, SSO, and PostgreSQL-backed deployment models.
 
-gates:
-  - id: dependency-approval
-    name: "New Dependency Approval"
-    trigger:
-      file_patterns:
-        - "package.json"
-        - "requirements.txt"
-    approval_mode: manual
-    timeout_seconds: 1800
-    notify: ["terminal"]
+Near-term roadmap items include dashboard maturity, webhook integrations, and continued observability hardening.
 
-  - id: security-files
-    name: "Security File Changes"
-    trigger:
-      file_patterns:
-        - ".env*"
-        - "**/auth/**"
-        - "**/*.pem"
-    approval_mode: manual
-    timeout_seconds: 1800
-    notify: ["terminal"]
-```
+## Documentation scope
 
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Run CLI in dev mode (no build step)
-npm run dev
-
-# Run tests
-npm test
-
-# Type-check without emitting
-npx tsc --noEmit
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Human Operator                        │
-│                   (CLI, Dashboard)                       │
-├─────────────────────────────────────────────────────────┤
-│                 K6S GOVERNANCE ENGINE                    │
-│  ┌──────────┐ ┌──────────┐ ┌───────────────┐          │
-│  │  Audit   │ │ Boundary │ │  Sensitivity  │          │
-│  │  Logger  │ │ Enforcer │ │  Annotator    │          │
-│  └──────────┘ └──────────┘ └───────────────┘          │
-│  ┌──────────┐ ┌──────────┐ ┌──────────────────────┐    │
-│  │  State   │ │  Lock    │ │  Severity Classifier  │    │
-│  │  Manager │ │  Manager │ │                       │    │
-│  └──────────┘ └──────────┘ └──────────────────────┘    │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │              SQLite Store (.khoregos/k6s.db)      │   │
-│  └──────────────────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────┤
-│  ┌───────────────┐    ┌─────────────────────┐          │
-│  │  MCP Server   │    │  Filesystem Watcher  │          │
-│  │  (governance  │    │  (chokidar)          │          │
-│  │   tools)      │    │                      │          │
-│  └───────────────┘    └─────────────────────┘          │
-├─────────────────────────────────────────────────────────┤
-│              CLAUDE CODE + AGENT TEAMS                   │
-│                                                          │
-│  Lead Agent ──► Teammate 1                               │
-│              ──► Teammate 2                               │
-└─────────────────────────────────────────────────────────┘
-```
-
-## Roadmap
-
-- **Phase 1** (complete): Audit trail, sessions, boundaries, locks.
-- **Phase 2** (complete): Sensitive-file annotations, severity classification, operator/git attribution.
-- **Phase 3**: Dashboard, OpenTelemetry, Prometheus, webhooks, HMAC audit signing.
-- **Phase 4**: Strict enforcement, plugin system.
-- **Phase 5**: Compliance tooling, audit report generation.
-- **Phase 6**: Enterprise features (SSO, RBAC, PostgreSQL backend).
+This README is intentionally concise. A full, comprehensive wiki will cover deep configuration, architecture internals, compliance mappings, and operational playbooks.
 
 ## License
 
