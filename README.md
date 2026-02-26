@@ -62,6 +62,36 @@ k6s audit show --severity critical
 k6s audit export --format json
 ```
 
+Here is what `k6s audit show` looks like after a real governed session:
+
+```
+┌──────────┬─────┬───────┬─────────┬──────┬────────────────────────┬───────────────────────────────────────────────┐
+│ Time     │ Seq │ Delta │ Agent   │ Sev  │ Type                   │ Action                                        │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:29:49 │ 10  │ 5.2s  │ system  │ info │ session_complete       │ claude code session ended                     │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:29:44 │ 9   │ 51.9s │ primary │ warn │ tool_use               │ tool_use: bash — node index.js &              │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:28:52 │ 8   │ 17ms  │ primary │ warn │ sensitive_needs_review │ Sensitive file modified: New Dependency App.. │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:28:52 │ 7   │ 5.1s  │ primary │ info │ tool_use               │ tool_use: edit — package.json                  │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:28:47 │ 6   │ 7.3s  │ primary │ info │ tool_use               │ tool_use: Read                                │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:28:40 │ 5   │ 1m57s │ primary │ info │ tool_use               │ tool_use: write — index.js                    │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:26:43 │ 4   │ 32.7s │ primary │ info │ tool_use               │ tool_use: bash — npm install express           │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:26:10 │ 3   │ 4.3s  │ primary │ info │ tool_use               │ tool_use: Read                                │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:26:06 │ 2   │ 11.6s │ primary │ info │ tool_use               │ tool_use: bash — ls -la                        │
+├──────────┼─────┼───────┼─────────┼──────┼────────────────────────┼───────────────────────────────────────────────┤
+│ 17:25:54 │ 1   │ —     │ system  │ info │ session_start          │ session started                               │
+└──────────┴─────┴───────┴─────────┴──────┴────────────────────────┴───────────────────────────────────────────────┘
+```
+
+Every tool invocation, agent identity, severity level, and timing delta is captured automatically. The `sensitive_needs_review` event on seq 8 was triggered because the agent edited `package.json`, which matches the dependency-approval gate rule.
+
 5. **Optionally plug observability tooling.**
 
 If you enable observability settings in `k6s.yaml`, Khoregos can emit OpenTelemetry data and expose a Prometheus metrics endpoint for dashboards and alerting.
