@@ -55,4 +55,21 @@ describe("extractDurationMs", () => {
     expect(extractDurationMs({ started_at: "2026-02-26T10:30:00.000Z" })).toBeUndefined();
     expect(extractDurationMs({ started_at: "2026-02-26T10:30:03.000Z", ended_at: "2026-02-26T10:30:00.000Z" })).toBeUndefined();
   });
+
+  it("rejects explicit duration values above the security cap", () => {
+    expect(extractDurationMs({ duration_ms: 3_600_001 })).toBeUndefined();
+    expect(extractDurationMs({ durationMs: 3_600_001 })).toBeUndefined();
+  });
+
+  it("rejects derived duration values above the security cap", () => {
+    const duration = extractDurationMs({
+      started_at: "2026-02-26T10:30:00.000Z",
+      ended_at: "2026-02-26T11:30:00.001Z",
+    });
+    expect(duration).toBeUndefined();
+  });
+
+  it("accepts duration values at the security cap", () => {
+    expect(extractDurationMs({ duration_ms: 3_600_000 })).toBe(3_600_000);
+  });
 });

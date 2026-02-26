@@ -32,6 +32,7 @@ import type { EventType } from "../models/audit.js";
 // Maximum bytes to read from stdin before aborting (1 MB).
 // Hook payloads are small JSON objects; anything larger is anomalous.
 const MAX_STDIN_BYTES = 1_048_576;
+const MAX_DURATION_MS = 3_600_000;
 
 function readHookInput(): Record<string, unknown> {
   try {
@@ -136,7 +137,12 @@ export function extractDurationMs(data: Record<string, unknown>): number | undef
   ];
 
   for (const candidate of numericCandidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
+    if (
+      typeof candidate === "number" &&
+      Number.isFinite(candidate) &&
+      candidate >= 0 &&
+      candidate <= MAX_DURATION_MS
+    ) {
       return candidate;
     }
   }
@@ -171,7 +177,7 @@ export function extractDurationMs(data: Record<string, unknown>): number | undef
 
   if (startMs == null || endMs == null) return undefined;
   const duration = endMs - startMs;
-  if (!Number.isFinite(duration) || duration < 0) return undefined;
+  if (!Number.isFinite(duration) || duration < 0 || duration > MAX_DURATION_MS) return undefined;
   return duration;
 }
 

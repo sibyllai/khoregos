@@ -25,7 +25,7 @@ function resolveK6sExecutable(): string {
     const abs = path.resolve(argv1);
     if (existsSync(abs)) return abs;
   }
-  return "k6s";
+  throw new Error("Unable to resolve absolute path for k6s executable.");
 }
 
 function shellQuote(cmd: string): string {
