@@ -2,9 +2,9 @@
  * Team management CLI commands.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import path from "node:path";
 import { Command } from "commander";
 import chalk from "chalk";
@@ -20,8 +20,6 @@ import {
 import { AuditLogger, pruneAuditEvents } from "../engine/audit.js";
 import { loadSigningKey } from "../engine/signing.js";
 import {
-  initTelemetry,
-  shutdownTelemetry,
   getTracer,
   redactEndpointForLogs,
   recordSessionStart,
@@ -81,6 +79,63 @@ function withDb<T>(projectRoot: string, fn: (db: Db) => T): T {
   }
 }
 
+export function telemetryPidFile(projectRoot: string): string {
+  return path.join(projectRoot, ".khoregos", "telemetry.pid");
+}
+
+export function readTelemetryPid(projectRoot: string): number | null {
+  const pidPath = telemetryPidFile(projectRoot);
+  if (!existsSync(pidPath)) return null;
+  try {
+    const raw = readFileSync(pidPath, "utf-8").trim();
+    const pid = Number(raw);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearTelemetryPid(projectRoot: string): void {
+  const pidPath = telemetryPidFile(projectRoot);
+  try {
+    unlinkSync(pidPath);
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+}
+
+export function stopTelemetryDaemon(projectRoot: string): void {
+  const pid = readTelemetryPid(projectRoot);
+  if (!pid) {
+    clearTelemetryPid(projectRoot);
+    return;
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (e: unknown) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH") {
+      console.error(`Warning: Failed to stop telemetry daemon (pid ${pid}): ${(e as Error).message}.`);
+    }
+  } finally {
+    clearTelemetryPid(projectRoot);
+  }
+}
+
+export function startTelemetryDaemon(projectRoot: string): void {
+  stopTelemetryDaemon(projectRoot);
+  const child = spawn(
+    "k6s",
+    ["telemetry", "serve", "--project-root", projectRoot],
+    {
+      detached: true,
+      stdio: "ignore",
+    },
+  );
+  child.unref();
+  writeFileSync(telemetryPidFile(projectRoot), `${child.pid}\n`, { mode: 0o600 });
+}
+
 export function registerTeamCommands(program: Command): void {
   const team = program
     .command("team")
@@ -113,11 +168,15 @@ export function registerTeamCommands(program: Command): void {
       }
 
       const config = loadConfig(configFile);
-      initTelemetry(config);
       if (config.observability?.opentelemetry?.enabled) {
         const endpoint = config.observability.opentelemetry.endpoint ?? "http://localhost:4318";
         const safeEndpoint = redactEndpointForLogs(endpoint);
         console.log(chalk.dim(`Sending traces to ${safeEndpoint}. Ensure your OTLP collector is running.`));
+      }
+      if (config.observability?.prometheus?.enabled) {
+        const port = config.observability.prometheus.port ?? 9090;
+        console.log(chalk.dim(`Prometheus metrics available at http://localhost:${port}/metrics`));
+        startTelemetryDaemon(projectRoot);
       }
 
       const operator =
@@ -234,7 +293,6 @@ export function registerTeamCommands(program: Command): void {
         console.log();
         console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
       }
-      await shutdownTelemetry();
     });
 
   team
@@ -266,8 +324,7 @@ export function registerTeamCommands(program: Command): void {
       removeClaudeMdGovernance(projectRoot);
       unregisterHooks(projectRoot);
       daemon.removeState();
-
-      await shutdownTelemetry();
+      stopTelemetryDaemon(projectRoot);
 
       console.log(chalk.green("✓") + ` Session ${sessionId.slice(0, 8)}... stopped`);
       console.log(chalk.green("✓") + " Governance removed (CLAUDE.md, hooks)");
@@ -313,11 +370,15 @@ export function registerTeamCommands(program: Command): void {
 
         const context = sm.generateResumeContext(prev.id);
         const config = loadConfig(configFile);
-        initTelemetry(config);
         if (config.observability?.opentelemetry?.enabled) {
           const endpoint = config.observability.opentelemetry.endpoint ?? "http://localhost:4318";
           const safeEndpoint = redactEndpointForLogs(endpoint);
           console.log(chalk.dim(`Sending traces to ${safeEndpoint}. Ensure your OTLP collector is running.`));
+        }
+        if (config.observability?.prometheus?.enabled) {
+          const port = config.observability.prometheus.port ?? 9090;
+          console.log(chalk.dim(`Prometheus metrics available at http://localhost:${port}/metrics`));
+        startTelemetryDaemon(projectRoot);
         }
         const newSession = sm.createSession({
           objective: prev.objective,
@@ -380,7 +441,6 @@ export function registerTeamCommands(program: Command): void {
       console.log("  " + chalk.cyan.bold("claude"));
       console.log();
       console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
-      await shutdownTelemetry();
     });
 
   team

@@ -89,6 +89,8 @@ export class Db {
   }
 
   connect(): void {
+    if (this._db) return;
+
     const dir = path.dirname(this.path);
     mkdirSync(dir, { recursive: true });
     chmodSync(dir, 0o700);
@@ -112,6 +114,10 @@ export class Db {
   }
 
   get db(): Database.Database {
+    if (!this._db) {
+      // Reconnect lazily if the handle was closed unexpectedly.
+      this.connect();
+    }
     if (!this._db) throw new Error("Database not connected");
     return this._db;
   }

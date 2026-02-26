@@ -13,6 +13,11 @@ import {
   shutdownTelemetry,
   getTracer,
   redactEndpointForLogs,
+  recordSessionStart,
+  recordAuditEvent,
+  recordActiveAgentDelta,
+  recordBoundaryViolation,
+  recordToolDurationSeconds,
 } from "../engine/telemetry.js";
 import {
   generateDefaultConfig,
@@ -95,33 +100,115 @@ program
   .command("telemetry")
   .description("OpenTelemetry diagnostics")
   .argument("[action]", "Action: smoke")
-  .action(async (action?: string) => {
+  .option("--project-root <path>", "Project root to load k6s.yaml from")
+  .action(async (action?: string, opts?: { projectRoot?: string }) => {
     const cmd = action ?? "smoke";
-    if (cmd !== "smoke") {
-      console.error(chalk.red(`Unknown action: ${cmd}. Use 'smoke' to send a test trace.`));
-      process.exit(1);
+    if (cmd === "smoke") {
+      const endpoint = process.env.K6S_OTEL_ENDPOINT ?? "http://localhost:4318";
+      const config = K6sConfigSchema.parse({
+        project: { name: "smoke" },
+        observability: {
+          opentelemetry: { enabled: true, endpoint },
+        },
+      });
+      initTelemetry(config);
+      const tracer = getTracer();
+      tracer.startActiveSpan(
+        "smoke_test",
+        { attributes: { smoke: "true" } },
+        (span) => {
+          span.end();
+        },
+      );
+      await shutdownTelemetry();
+      const safeEndpoint = redactEndpointForLogs(endpoint);
+      console.log(chalk.green("Smoke trace sent."));
+      console.log(chalk.dim(`Endpoint: ${safeEndpoint}`));
+      console.log(chalk.dim("In Jaeger, select service 'khoregos' and look for span 'smoke_test'."));
+      return;
     }
-    const endpoint = process.env.K6S_OTEL_ENDPOINT ?? "http://localhost:4318";
-    const config = K6sConfigSchema.parse({
-      project: { name: "smoke" },
-      observability: {
-        opentelemetry: { enabled: true, endpoint },
-      },
-    });
-    initTelemetry(config);
-    const tracer = getTracer();
-    tracer.startActiveSpan(
-      "smoke_test",
-      { attributes: { smoke: "true" } },
-      (span) => {
-        span.end();
-      },
-    );
-    await shutdownTelemetry();
-    const safeEndpoint = redactEndpointForLogs(endpoint);
-    console.log(chalk.green("Smoke trace sent."));
-    console.log(chalk.dim(`Endpoint: ${safeEndpoint}`));
-    console.log(chalk.dim("In Jaeger, select service 'khoregos' and look for span 'smoke_test'."));
+
+    if (cmd === "serve") {
+      const projectRoot = opts?.projectRoot ?? process.cwd();
+      const configFile = path.join(projectRoot, "k6s.yaml");
+      if (!existsSync(configFile)) {
+        console.error(chalk.red(`No k6s.yaml found at ${configFile}.`));
+        process.exit(1);
+      }
+      const config = loadConfig(configFile);
+      initTelemetry(config);
+      const db = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
+      db.connect();
+
+      let lastRowId = 0;
+      const applyAuditMetrics = (): void => {
+        const rows = db.fetchAll(
+          `SELECT rowid, sequence, event_type, severity, details
+           FROM audit_events
+           WHERE rowid > ?
+           ORDER BY rowid ASC`,
+          [lastRowId],
+        );
+        for (const row of rows) {
+          const rowId = Number(row.rowid ?? 0);
+          const sequence = Number(row.sequence ?? 0);
+          const eventType = String(row.event_type ?? "log");
+          const severity = String(row.severity ?? "info");
+          const detailsRaw = typeof row.details === "string" ? row.details : null;
+          let details: Record<string, unknown> | null = null;
+          if (detailsRaw) {
+            try {
+              details = JSON.parse(detailsRaw) as Record<string, unknown>;
+            } catch {
+              details = null;
+            }
+          }
+
+          recordAuditEvent(eventType, severity);
+          if (eventType === "session_start") {
+            recordSessionStart();
+          } else if (eventType === "agent_spawn") {
+            recordActiveAgentDelta(1);
+          } else if (eventType === "agent_complete") {
+            recordActiveAgentDelta(-1);
+          } else if (eventType === "boundary_violation") {
+            const violationType =
+              (details?.violation_type as string | undefined) ?? "unknown";
+            recordBoundaryViolation(violationType);
+          } else if (eventType === "tool_use") {
+            const durationMs = details?.duration_ms;
+            if (typeof durationMs === "number" && durationMs >= 0) {
+              recordToolDurationSeconds(durationMs / 1000);
+            }
+          }
+
+          if (rowId > lastRowId) {
+            lastRowId = rowId;
+          }
+        }
+      };
+
+      applyAuditMetrics();
+      const interval = setInterval(() => {
+        applyAuditMetrics();
+      }, 1000);
+      const shutdown = async () => {
+        clearInterval(interval);
+        db.close();
+        await shutdownTelemetry();
+        process.exit(0);
+      };
+      process.on("SIGTERM", () => {
+        void shutdown();
+      });
+      process.on("SIGINT", () => {
+        void shutdown();
+      });
+      return;
+    }
+
+    console.error(chalk.red(`Unknown action: ${cmd}. Use 'smoke' or 'serve'.`));
+    process.exit(1);
   });
 
 // status
@@ -161,17 +248,18 @@ program
   .command("mcp")
   .description("MCP server commands")
   .argument("<action>", "Action: serve")
-  .action((action: string) => {
+  .option("--project-root <path>", "Project root to serve from")
+  .action((action: string, opts: { projectRoot?: string }) => {
     if (action === "serve") {
-      runMcpServer();
+      runMcpServer(opts.projectRoot);
     } else {
       console.error(chalk.red(`Unknown action: ${action}`));
       process.exit(1);
     }
   });
 
-function runMcpServer(): void {
-  const projectRoot = process.cwd();
+function runMcpServer(projectRootArg?: string): void {
+  const projectRoot = projectRootArg ?? process.cwd();
   const configFile = path.join(projectRoot, "k6s.yaml");
 
   let config;
@@ -188,15 +276,26 @@ function runMcpServer(): void {
     sessionId = (state.session_id as string) ?? "default";
   }
 
+  initTelemetry(config);
+  if (sessionId !== "default") {
+    recordSessionStart();
+  }
+
   const db = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
   db.connect();
 
   const server = new K6sServer(db, config, sessionId, projectRoot);
-  server.runStdio().catch((err) => {
-    console.error("MCP server error:", err);
-    db.close();
-    process.exit(1);
-  });
+  server.runStdio()
+    .then(async () => {
+      await shutdownTelemetry();
+      db.close();
+    })
+    .catch(async (err) => {
+      console.error("MCP server error:", err);
+      await shutdownTelemetry();
+      db.close();
+      process.exit(1);
+    });
 }
 
 program.parse();

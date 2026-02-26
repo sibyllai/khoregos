@@ -19,6 +19,20 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+function resolveK6sExecutable(): string {
+  const argv1 = process.argv[1];
+  if (argv1) {
+    const abs = path.resolve(argv1);
+    if (existsSync(abs)) return abs;
+  }
+  throw new Error("Unable to resolve absolute path for k6s executable.");
+}
+
+function shellQuote(cmd: string): string {
+  // JSON string quoting is safe for shell command entries.
+  return JSON.stringify(cmd);
+}
+
 /** Write a file and set owner-only permissions (0o600). */
 function writeSecureFile(filePath: string, content: string): void {
   writeFileSync(filePath, content, { mode: 0o600 });
@@ -175,14 +189,38 @@ function loadClaudeSettings(
   return [filePath, {}];
 }
 
+function loadProjectMcpConfig(
+  projectRoot: string,
+): [filePath: string, settings: Record<string, unknown>] {
+  const filePath = path.join(projectRoot, ".mcp.json");
+  if (existsSync(filePath)) {
+    try {
+      return [filePath, JSON.parse(readFileSync(filePath, "utf-8"))];
+    } catch {
+      // Ignore corrupt file and rewrite it.
+    }
+  }
+  return [filePath, {}];
+}
+
 export function registerMcpServer(projectRoot: string): void {
   const [filePath, settings] = loadClaudeSettings(projectRoot);
+  const k6sExec = resolveK6sExecutable();
   if (!settings.mcpServers) settings.mcpServers = {};
   (settings.mcpServers as Record<string, unknown>).khoregos = {
-    command: "k6s",
-    args: ["mcp", "serve"],
+    command: k6sExec,
+    args: ["mcp", "serve", "--project-root", projectRoot],
   };
   writeSecureFile(filePath, JSON.stringify(settings, null, 2));
+
+  // Also register in .mcp.json for modern Claude versions.
+  const [mcpPath, mcpSettings] = loadProjectMcpConfig(projectRoot);
+  if (!mcpSettings.mcpServers) mcpSettings.mcpServers = {};
+  (mcpSettings.mcpServers as Record<string, unknown>).khoregos = {
+    command: k6sExec,
+    args: ["mcp", "serve", "--project-root", projectRoot],
+  };
+  writeSecureFile(mcpPath, JSON.stringify(mcpSettings, null, 2));
 }
 
 export function unregisterMcpServer(projectRoot: string): void {
@@ -199,17 +237,36 @@ export function unregisterMcpServer(projectRoot: string): void {
   } catch {
     // ignore corrupt file
   }
+
+  const mcpFile = path.join(projectRoot, ".mcp.json");
+  if (!existsSync(mcpFile)) return;
+
+  try {
+    const settings = JSON.parse(readFileSync(mcpFile, "utf-8"));
+    const servers = settings.mcpServers as Record<string, unknown> | undefined;
+    if (servers?.khoregos) {
+      delete servers.khoregos;
+      writeSecureFile(mcpFile, JSON.stringify(settings, null, 2));
+    }
+  } catch {
+    // ignore corrupt file
+  }
 }
 
 export function registerHooks(projectRoot: string): void {
   const [filePath, settings] = loadClaudeSettings(projectRoot);
+  const k6sExec = resolveK6sExecutable();
+  const hookPostToolUse = `${shellQuote(k6sExec)} hook post-tool-use`;
+  const hookSubagentStart = `${shellQuote(k6sExec)} hook subagent-start`;
+  const hookSubagentStop = `${shellQuote(k6sExec)} hook subagent-stop`;
+  const hookSessionStop = `${shellQuote(k6sExec)} hook session-stop`;
 
   settings.hooks = {
     PostToolUse: [
       {
         matcher: "",
         hooks: [
-          { type: "command", command: "k6s hook post-tool-use", timeout: 10 },
+          { type: "command", command: hookPostToolUse, timeout: 10 },
         ],
       },
     ],
@@ -217,7 +274,7 @@ export function registerHooks(projectRoot: string): void {
       {
         matcher: "",
         hooks: [
-          { type: "command", command: "k6s hook subagent-start", timeout: 10 },
+          { type: "command", command: hookSubagentStart, timeout: 10 },
         ],
       },
     ],
@@ -225,7 +282,7 @@ export function registerHooks(projectRoot: string): void {
       {
         matcher: "",
         hooks: [
-          { type: "command", command: "k6s hook subagent-stop", timeout: 10 },
+          { type: "command", command: hookSubagentStop, timeout: 10 },
         ],
       },
     ],
@@ -233,7 +290,7 @@ export function registerHooks(projectRoot: string): void {
       {
         matcher: "",
         hooks: [
-          { type: "command", command: "k6s hook session-stop", timeout: 10 },
+          { type: "command", command: hookSessionStop, timeout: 10 },
         ],
       },
     ],

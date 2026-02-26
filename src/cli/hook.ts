@@ -32,6 +32,7 @@ import type { EventType } from "../models/audit.js";
 // Maximum bytes to read from stdin before aborting (1 MB).
 // Hook payloads are small JSON objects; anything larger is anomalous.
 const MAX_STDIN_BYTES = 1_048_576;
+const MAX_DURATION_MS = 3_600_000;
 
 function readHookInput(): Record<string, unknown> {
   try {
@@ -109,6 +110,75 @@ function truncate(obj: unknown, maxLen = 2000): unknown {
   const s = typeof obj === "string" ? obj : JSON.stringify(obj);
   if (s.length > maxLen) return s.slice(0, maxLen) + "...[truncated]";
   return obj;
+}
+
+export function parseTimestampMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    // Treat large values as milliseconds, otherwise as seconds.
+    return value > 1_000_000_000_000 ? value : value * 1000;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+export function extractDurationMs(data: Record<string, unknown>): number | undefined {
+  const numericCandidates = [
+    data.duration_ms,
+    data.durationMs,
+    data.elapsed_ms,
+    data.elapsedMs,
+    (data.timing as Record<string, unknown> | undefined)?.duration_ms,
+    (data.timing as Record<string, unknown> | undefined)?.durationMs,
+    (data.timing as Record<string, unknown> | undefined)?.elapsed_ms,
+    (data.timing as Record<string, unknown> | undefined)?.elapsedMs,
+  ];
+
+  for (const candidate of numericCandidates) {
+    if (
+      typeof candidate === "number" &&
+      Number.isFinite(candidate) &&
+      candidate >= 0 &&
+      candidate <= MAX_DURATION_MS
+    ) {
+      return candidate;
+    }
+  }
+
+  const startCandidates = [
+    data.started_at,
+    data.start_time,
+    data.startTime,
+    (data.timing as Record<string, unknown> | undefined)?.started_at,
+    (data.timing as Record<string, unknown> | undefined)?.start_time,
+    (data.timing as Record<string, unknown> | undefined)?.startTime,
+  ];
+  const endCandidates = [
+    data.ended_at,
+    data.finished_at,
+    data.end_time,
+    data.endTime,
+    data.timestamp,
+    (data.timing as Record<string, unknown> | undefined)?.ended_at,
+    (data.timing as Record<string, unknown> | undefined)?.finished_at,
+    (data.timing as Record<string, unknown> | undefined)?.end_time,
+    (data.timing as Record<string, unknown> | undefined)?.endTime,
+    (data.timing as Record<string, unknown> | undefined)?.timestamp,
+  ];
+
+  const startMs = startCandidates
+    .map(parseTimestampMs)
+    .find((v): v is number => v != null);
+  const endMs = endCandidates
+    .map(parseTimestampMs)
+    .find((v): v is number => v != null);
+
+  if (startMs == null || endMs == null) return undefined;
+  const duration = endMs - startMs;
+  if (!Number.isFinite(duration) || duration < 0 || duration > MAX_DURATION_MS) return undefined;
+  return duration;
 }
 
 /**
@@ -246,6 +316,10 @@ export function registerHookCommands(program: Command): void {
         session_id: data.session_id,
         tool_use_id: data.tool_use_id,
       };
+      const durationMs = extractDurationMs(data);
+      if (durationMs != null && durationMs >= 0) {
+        details.duration_ms = durationMs;
+      }
       const toolOutputStr =
         toolResponse != null
           ? typeof toolResponse === "string"
@@ -278,7 +352,6 @@ export function registerHookCommands(program: Command): void {
       logger.stop();
 
       initHookTelemetry(projectRoot);
-      const durationMs = typeof data.duration_ms === "number" ? data.duration_ms : undefined;
       const agentName = agentId
         ? sm.getAgent(agentId)?.name ?? "primary"
         : "primary";
