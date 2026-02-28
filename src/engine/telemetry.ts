@@ -78,11 +78,19 @@ export function redactEndpointForLogs(endpoint: string): string {
   }
 }
 
+export interface TelemetryOptions {
+  /** Skip metric reader setup (OTLP and Prometheus). Use when a separate
+   *  telemetry daemon is the canonical metrics source. */
+  skipMetrics?: boolean;
+}
+
 /**
- * Initialize OpenTelemetry SDK when config has observability.opentelemetry.enabled.
- * Otherwise does nothing (no-op providers remain in use).
+ * Initialize OpenTelemetry SDK.
+ * When neither OTel nor Prometheus is enabled, does nothing (no-op providers).
+ * Pass `{ skipMetrics: true }` in short-lived CLI processes that delegate
+ * metric ownership to the telemetry daemon.
  */
-export function initTelemetry(config: K6sConfig): void {
+export function initTelemetry(config: K6sConfig, options?: TelemetryOptions): void {
   if (sdk || meterProvider) return; // Already initialized — idempotent.
   const otel = config.observability?.opentelemetry;
   const prometheus = config.observability?.prometheus;
@@ -100,51 +108,55 @@ export function initTelemetry(config: K6sConfig): void {
     "service.version": VERSION,
   });
 
-  const metricReaders: MetricReader[] = [];
-  if (isOtelEnabled) {
-    const metricExporter = new OTLPMetricExporter({ url: metricsUrl });
-    const metricReader = new PeriodicExportingMetricReader({
-      exporter: metricExporter,
-      exportIntervalMillis: 10_000,
-    });
-    metricReaders.push(metricReader);
-  }
+  const skipMetrics = options?.skipMetrics === true;
 
-  // Hook subprocesses are short-lived and should not attempt to bind a
-  // long-lived Prometheus listener port on every hook invocation.
-  if (isPrometheusEnabled && !isHookCommandProcess()) {
-    const port = prometheus.port ?? 9090;
-    const exporter = new PrometheusExporter(
-      { port, preventServerStart: false },
-      (error) => {
-        if (!error) return;
-        const err = error as NodeJS.ErrnoException;
-        if (err.code === "EADDRINUSE") {
+  if (!skipMetrics) {
+    const metricReaders: MetricReader[] = [];
+    if (isOtelEnabled) {
+      const metricExporter = new OTLPMetricExporter({ url: metricsUrl });
+      const metricReader = new PeriodicExportingMetricReader({
+        exporter: metricExporter,
+        exportIntervalMillis: 10_000,
+      });
+      metricReaders.push(metricReader);
+    }
+
+    // Hook subprocesses are short-lived and should not attempt to bind a
+    // long-lived Prometheus listener port on every hook invocation.
+    if (isPrometheusEnabled && !isHookCommandProcess()) {
+      const port = prometheus.port ?? 9090;
+      const exporter = new PrometheusExporter(
+        { port, preventServerStart: false },
+        (error) => {
+          if (!error) return;
+          const err = error as NodeJS.ErrnoException;
+          if (err.code === "EADDRINUSE") {
+            console.error(
+              `Warning: Prometheus metrics port ${port} is already in use. Metrics endpoint disabled.`,
+            );
+            return;
+          }
           console.error(
-            `Warning: Prometheus metrics port ${port} is already in use. Metrics endpoint disabled.`,
+            `Warning: Failed to start Prometheus metrics endpoint on port ${port}: ${err.message}.`,
           );
-          return;
-        }
-        console.error(
-          `Warning: Failed to start Prometheus metrics endpoint on port ${port}: ${err.message}.`,
-        );
-      },
-    );
-    prometheusExporter = exporter;
+        },
+      );
+      prometheusExporter = exporter;
 
-    // Cast required: exporter-prometheus can depend on a different OTel metrics
-    // package version than sdk-node/sdk-metrics in this repo. Runtime behavior
-    // is compatible; only private class fields differ across package copies.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    metricReaders.push(exporter as any);
-  }
+      // Cast required: exporter-prometheus can depend on a different OTel metrics
+      // package version than sdk-node/sdk-metrics in this repo. Runtime behavior
+      // is compatible; only private class fields differ across package copies.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      metricReaders.push(exporter as any);
+    }
 
-  if (metricReaders.length > 0) {
-    // Cast required: NodeSDK and SDK metrics can carry parallel OTel package
-    // copies with diverging private fields, but they are runtime-compatible.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    meterProvider = new MeterProvider({ resource, readers: metricReaders as any });
-    metrics.setGlobalMeterProvider(meterProvider);
+    if (metricReaders.length > 0) {
+      // Cast required: NodeSDK and SDK metrics can carry parallel OTel package
+      // copies with diverging private fields, but they are runtime-compatible.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      meterProvider = new MeterProvider({ resource, readers: metricReaders as any });
+      metrics.setGlobalMeterProvider(meterProvider);
+    }
   }
 
   if (!isOtelEnabled) return;

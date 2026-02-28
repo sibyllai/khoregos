@@ -20,6 +20,8 @@ import {
 import { AuditLogger, pruneAuditEvents } from "../engine/audit.js";
 import { loadSigningKey } from "../engine/signing.js";
 import {
+  initTelemetry,
+  shutdownTelemetry,
   getTracer,
   redactEndpointForLogs,
   recordSessionStart,
@@ -168,16 +170,22 @@ export function registerTeamCommands(program: Command): void {
       }
 
       const config = loadConfig(configFile);
+      const prometheusEnabled = config.observability?.prometheus?.enabled === true;
+
       if (config.observability?.opentelemetry?.enabled) {
         const endpoint = config.observability.opentelemetry.endpoint ?? "http://localhost:4318";
         const safeEndpoint = redactEndpointForLogs(endpoint);
         console.log(chalk.dim(`Sending traces to ${safeEndpoint}. Ensure your OTLP collector is running.`));
       }
-      if (config.observability?.prometheus?.enabled) {
+      if (prometheusEnabled) {
         const port = config.observability.prometheus.port ?? 9090;
         console.log(chalk.dim(`Prometheus metrics available at http://localhost:${port}/metrics`));
         startTelemetryDaemon(projectRoot);
       }
+
+      // When the Prometheus daemon is running it owns all metric export.
+      // The CLI process only needs OTLP tracing in that case.
+      initTelemetry(config, { skipMetrics: prometheusEnabled });
 
       const operator =
         process.env.USER ??
@@ -293,6 +301,7 @@ export function registerTeamCommands(program: Command): void {
         console.log();
         console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
       }
+      await shutdownTelemetry();
     });
 
   team
@@ -301,6 +310,7 @@ export function registerTeamCommands(program: Command): void {
     .action(async () => {
       const projectRoot = process.cwd();
       const khoregoDir = path.join(projectRoot, ".khoregos");
+      const configFile = path.join(projectRoot, "k6s.yaml");
 
       const daemon = new DaemonState(khoregoDir);
       if (!daemon.isRunning()) {
@@ -310,6 +320,13 @@ export function registerTeamCommands(program: Command): void {
 
       const state = daemon.readState();
       const sessionId = (state.session_id as string) ?? "unknown";
+
+      // Initialize tracing so the session.stop span is exported via OTLP.
+      if (existsSync(configFile)) {
+        const config = loadConfig(configFile);
+        const prometheusEnabled = config.observability?.prometheus?.enabled === true;
+        initTelemetry(config, { skipMetrics: prometheusEnabled });
+      }
 
       const tracer = getTracer();
       tracer.startActiveSpan("session.stop", { attributes: { "session.id": sessionId } }, (span) => {
@@ -325,6 +342,8 @@ export function registerTeamCommands(program: Command): void {
       unregisterHooks(projectRoot);
       daemon.removeState();
       stopTelemetryDaemon(projectRoot);
+
+      await shutdownTelemetry();
 
       console.log(chalk.green("✓") + ` Session ${sessionId.slice(0, 8)}... stopped`);
       console.log(chalk.green("✓") + " Governance removed (CLAUDE.md, hooks)");
@@ -370,16 +389,21 @@ export function registerTeamCommands(program: Command): void {
 
         const context = sm.generateResumeContext(prev.id);
         const config = loadConfig(configFile);
+        const prometheusEnabled = config.observability?.prometheus?.enabled === true;
+
         if (config.observability?.opentelemetry?.enabled) {
           const endpoint = config.observability.opentelemetry.endpoint ?? "http://localhost:4318";
           const safeEndpoint = redactEndpointForLogs(endpoint);
           console.log(chalk.dim(`Sending traces to ${safeEndpoint}. Ensure your OTLP collector is running.`));
         }
-        if (config.observability?.prometheus?.enabled) {
+        if (prometheusEnabled) {
           const port = config.observability.prometheus.port ?? 9090;
           console.log(chalk.dim(`Prometheus metrics available at http://localhost:${port}/metrics`));
-        startTelemetryDaemon(projectRoot);
+          startTelemetryDaemon(projectRoot);
         }
+
+        initTelemetry(config, { skipMetrics: prometheusEnabled });
+
         const newSession = sm.createSession({
           objective: prev.objective,
           configSnapshot: JSON.stringify(sanitizeConfigForStorage(config)),
@@ -441,6 +465,7 @@ export function registerTeamCommands(program: Command): void {
       console.log("  " + chalk.cyan.bold("claude"));
       console.log();
       console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
+      await shutdownTelemetry();
     });
 
   team
