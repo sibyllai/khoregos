@@ -103,7 +103,7 @@ Every tool invocation, agent identity, severity level, and timing delta is captu
 
 5. **Optionally plug observability tooling.**
 
-If you enable observability settings in `k6s.yaml`, Khoregos can emit OpenTelemetry data and expose a Prometheus metrics endpoint for dashboards and alerting.
+If you enable observability settings in `k6s.yaml`, Khoregos can emit OpenTelemetry data, expose a Prometheus metrics endpoint, and dispatch signed webhooks for downstream notifications.
 
 6. **Stop or resume when your team pauses work.**
 
@@ -137,7 +137,7 @@ Upcoming and next-phase priorities:
 - **Phase 5.** Compliance-ready reporting workflows, standards-oriented report generation, and checkpoint tooling.
 - **Phase 6.** Enterprise platform capabilities such as RBAC, SSO, and PostgreSQL-backed deployment models.
 
-Near-term roadmap items include dashboard maturity, webhook integrations, and continued observability hardening.
+Near-term roadmap items include dashboard maturity and continued observability hardening.
 
 ## Documentation scope
 
