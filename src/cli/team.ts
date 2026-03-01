@@ -24,6 +24,11 @@ import {
 } from "../engine/audit.js";
 import { loadSigningKey } from "../engine/signing.js";
 import {
+  PluginManager,
+  getPluginManager,
+  setPluginManager,
+} from "../engine/plugins.js";
+import {
   initTelemetry,
   shutdownTelemetry,
   getTracer,
@@ -288,6 +293,15 @@ export function registerTeamCommands(program: Command): void {
         return s;
       });
 
+      if (config.plugins.length > 0) {
+        const pluginManager = new PluginManager();
+        await pluginManager.loadPlugins(config.plugins, session.id, projectRoot);
+        setPluginManager(pluginManager);
+        await pluginManager.callSessionStart();
+      } else {
+        setPluginManager(null);
+      }
+
       console.log(chalk.green("✓") + ` Session ${chalk.bold(session.id.slice(0, 8) + "...")} created`);
 
       injectClaudeMdGovernance(projectRoot, session.id);
@@ -370,6 +384,12 @@ export function registerTeamCommands(program: Command): void {
         const sm = new StateManager(db, projectRoot);
         sm.markSessionCompleted(sessionId);
       });
+
+      const pluginManager = getPluginManager();
+      if (pluginManager) {
+        await pluginManager.callSessionStop();
+        setPluginManager(null);
+      }
 
       removeClaudeMdGovernance(projectRoot);
       unregisterHooks(projectRoot);
@@ -499,6 +519,15 @@ export function registerTeamCommands(program: Command): void {
       if (!result) {
         console.log(chalk.yellow("No session found to resume."));
         process.exit(1);
+      }
+
+      if (config.plugins.length > 0) {
+        const pluginManager = new PluginManager();
+        await pluginManager.loadPlugins(config.plugins, result.newSession.id, projectRoot);
+        setPluginManager(pluginManager);
+        await pluginManager.callSessionStart();
+      } else {
+        setPluginManager(null);
       }
 
       console.log(chalk.green("✓") + ` Resuming from session ${chalk.bold(result.prev.id.slice(0, 8) + "...")}`);

@@ -1,6 +1,6 @@
 {
   "name": "khoregos",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Enterprise governance layer for Claude Code Agent Teams",
   "type": "module",
   "bin": {

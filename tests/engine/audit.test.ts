@@ -9,6 +9,7 @@ import {
   pruneAuditEvents,
   setWebhookDispatcher,
 } from "../../src/engine/audit.js";
+import { setPluginManager, type PluginManager } from "../../src/engine/plugins.js";
 import { getTempDbPath, cleanupTempDir } from "../helpers.js";
 import { randomBytes } from "node:crypto";
 import { generateSigningKey, loadSigningKey } from "../../src/engine/signing.js";
@@ -158,6 +159,32 @@ describe("AuditLogger", () => {
         });
       } finally {
         setWebhookDispatcher(null);
+      }
+    });
+
+    it("dispatches plugin audit hooks after persisting an audit event", () => {
+      let seenPersistedEvent = false;
+      const pluginManager = {
+        callAuditEvent(event: { id: string }): void {
+          const row = db.fetchOne(
+            "SELECT COUNT(*) as count FROM audit_events WHERE id = ?",
+            [event.id],
+          );
+          seenPersistedEvent = ((row?.count as number) ?? 0) === 1;
+        },
+      } as PluginManager;
+
+      setPluginManager(pluginManager);
+      try {
+        const logger = new AuditLogger(db, sessionId, "trace-123", signingKey!);
+        logger.start();
+        logger.log({
+          eventType: "tool_use",
+          action: "plugin dispatch test",
+        });
+        expect(seenPersistedEvent).toBe(true);
+      } finally {
+        setPluginManager(null);
       }
     });
   });

@@ -30,6 +30,7 @@ Khoregos is built for this gap: structured, signed, queryable evidence for what 
 - **Supply chain visibility.** Automatic detection of dependency additions, removals, and updates in `package.json`.
 - **Webhook notifications.** HMAC-signed HTTP webhooks with retry backoff for downstream integrations.
 - **Resource limits.** Per-agent tool call limits with advisory enforcement and MCP warnings.
+- **Plugin extensibility.** ESM plugin system with lifecycle and event hooks for custom governance logic.
 - **Observability.** OpenTelemetry support and Prometheus metrics endpoint.
 - **MCP integration.** Native governance tools exposed through MCP, with automatic project wiring.
 
@@ -135,7 +136,7 @@ Khoregos is designed to make AI development reviewable and defensible.
 
 Upcoming and next-phase priorities:
 
-- **Phase 4.** Plugin architecture.
+- **Phase 4.** Complete.
 - **Phase 5.** Compliance-ready reporting workflows, standards-oriented report generation, and checkpoint tooling.
 - **Phase 6.** Enterprise platform capabilities such as RBAC, SSO, and PostgreSQL-backed deployment models.
 

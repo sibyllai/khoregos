@@ -17,6 +17,7 @@ import {
 import { computeHmac, genesisValue } from "./signing.js";
 import { recordAuditEvent } from "./telemetry.js";
 import type { WebhookDispatcher } from "./webhooks.js";
+import { getPluginManager } from "./plugins.js";
 
 let globalWebhookDispatcher: WebhookDispatcher | null = null;
 
@@ -103,6 +104,10 @@ export class AuditLogger {
         sessionId: this.sessionId,
         traceId: this.traceId ?? undefined,
       });
+    }
+    const pluginManager = getPluginManager();
+    if (pluginManager) {
+      pluginManager.callAuditEvent(event);
     }
     return event;
   }
