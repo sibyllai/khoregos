@@ -39,6 +39,10 @@ export const EventType = z.enum([
   "context_loaded",
   // Tool use (captured via Claude Code hooks)
   "tool_use",
+  // Dependency tracking (supply chain visibility).
+  "dependency_added",
+  "dependency_removed",
+  "dependency_updated",
   // Generic
   "log",
   "system",
