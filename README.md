@@ -26,6 +26,8 @@ Khoregos is built for this gap: structured, signed, queryable evidence for what 
 - **Boundary controls.** Allowed/forbidden path rules with violation tracking.
 - **Collaboration safety.** File lock primitives to reduce multi-agent edit collisions.
 - **Sensitive change annotations.** Gate-style markers for files that need human review.
+- **Audit reporting.** Structured Markdown reports with session summary, event timeline, chain integrity verification, and boundary violations.
+- **Supply chain visibility.** Automatic detection of dependency additions, removals, and updates in `package.json`.
 - **Observability.** OpenTelemetry support and Prometheus metrics endpoint.
 - **MCP integration.** Native governance tools exposed through MCP, with automatic project wiring.
 
@@ -65,6 +67,7 @@ k6s team start --run "implement feature x"
 ```bash
 k6s audit show
 k6s audit show --severity critical
+k6s audit report --session latest --output report.md
 k6s audit export --format json
 ```
 
@@ -130,7 +133,7 @@ Khoregos is designed to make AI development reviewable and defensible.
 
 Upcoming and next-phase priorities:
 
-- **Phase 4.** Strict enforcement, plugin architecture, and stronger supply-chain controls.
+- **Phase 4.** Strict enforcement, plugin architecture, and remaining supply-chain controls.
 - **Phase 5.** Compliance-ready reporting workflows, standards-oriented report generation, and checkpoint tooling.
 - **Phase 6.** Enterprise platform capabilities such as RBAC, SSO, and PostgreSQL-backed deployment models.
 
