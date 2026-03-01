@@ -13,6 +13,19 @@ const registerHooksMock = vi.fn();
 const unregisterHooksMock = vi.fn();
 const injectClaudeMdGovernanceMock = vi.fn();
 const removeClaudeMdGovernanceMock = vi.fn();
+const loadConfigMock = vi.fn(() => ({
+  version: "1",
+  project: { name: "test" },
+  session: { context_retention_days: 90, audit_retention_days: 365 },
+  boundaries: [],
+  gates: [],
+  observability: {
+    prometheus: { enabled: true, port: 9090 },
+    opentelemetry: { enabled: false, endpoint: "http://localhost:4318" },
+    webhooks: [],
+  },
+  plugins: [],
+}));
 
 type DaemonRecord = { session_id?: string };
 const daemonStateByDir = new Map<string, DaemonRecord>();
@@ -51,19 +64,7 @@ vi.mock("../../src/daemon/manager.js", () => {
 });
 
 vi.mock("../../src/models/config.js", () => ({
-  loadConfig: vi.fn(() => ({
-    version: "1",
-    project: { name: "test" },
-    session: { context_retention_days: 90, audit_retention_days: 365 },
-    boundaries: [],
-    gates: [],
-    observability: {
-      prometheus: { enabled: true, port: 9090 },
-      opentelemetry: { enabled: false, endpoint: "http://localhost:4318" },
-      webhooks: [],
-    },
-    plugins: [],
-  })),
+  loadConfig: (...args: unknown[]) => loadConfigMock(...args),
   sanitizeConfigForStorage: vi.fn((cfg) => cfg),
 }));
 
@@ -143,6 +144,7 @@ describe("team commands integration", () => {
   let projectRoot: string;
   let originalCwd: string;
   let killSpy: ReturnType<typeof vi.spyOn>;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     originalCwd = process.cwd();
@@ -160,11 +162,16 @@ describe("team commands integration", () => {
     unregisterHooksMock.mockClear();
     injectClaudeMdGovernanceMock.mockClear();
     removeClaudeMdGovernanceMock.mockClear();
+    loadConfigMock.mockClear();
     killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new Error(`process.exit:${code ?? 0}`);
+    });
   });
 
   afterEach(() => {
     killSpy.mockRestore();
+    exitSpy.mockRestore();
     process.chdir(originalCwd);
     rmSync(projectRoot, { recursive: true, force: true });
     vi.clearAllMocks();
@@ -198,5 +205,46 @@ describe("team commands integration", () => {
     expect(unregisterHooksMock).toHaveBeenCalledTimes(1);
     expect(killSpy).toHaveBeenCalledWith(13579, "SIGTERM");
     expect(existsSync(pidPath)).toBe(false);
+  });
+
+  it("team start fails when strict enforcement is configured outside git", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      version: "1",
+      project: { name: "test" },
+      session: { context_retention_days: 90, audit_retention_days: 365 },
+      boundaries: [
+        {
+          pattern: "*",
+          allowed_paths: ["**"],
+          forbidden_paths: [".env*"],
+          enforcement: "strict",
+        },
+      ],
+      gates: [],
+      observability: {
+        prometheus: { enabled: false, port: 9090 },
+        opentelemetry: { enabled: false, endpoint: "http://localhost:4318" },
+        webhooks: [],
+      },
+      plugins: [],
+    });
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("not a git repo");
+    });
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { registerTeamCommands } = await import("../../src/cli/team.js");
+    const program = new Command();
+    registerTeamCommands(program);
+
+    await expect(
+      program.parseAsync(["team", "start", "strict objective"], { from: "user" }),
+    ).rejects.toThrow("process.exit:1");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("strict boundary enforcement requires a git repository."),
+    );
+    expect(registerMcpServerMock).not.toHaveBeenCalled();
+    expect(registerHooksMock).not.toHaveBeenCalled();
+    stderrSpy.mockRestore();
   });
 });

@@ -3,8 +3,12 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Db } from "../../src/store/db.js";
-import { BoundaryEnforcer } from "../../src/engine/boundaries.js";
+import { BoundaryEnforcer, revertFile } from "../../src/engine/boundaries.js";
 import { getTempDbPath, cleanupTempDir } from "../helpers.js";
 import type { BoundaryConfig } from "../../src/models/config.js";
 
@@ -141,6 +145,56 @@ describe("BoundaryEnforcer", () => {
       expect(summary.allowed_paths).toEqual(["src/**"]);
       expect(summary.forbidden_paths).toEqual([".env*"]);
       expect(summary.enforcement).toBe("strict");
+    });
+  });
+
+  describe("revertFile", () => {
+    it("reverts tracked file content to the last commit", () => {
+      const repoRoot = mkdtempSync(path.join(tmpdir(), "k6s-boundary-revert-"));
+      try {
+        execFileSync("git", ["init"], { cwd: repoRoot, stdio: "pipe" });
+        const filePath = path.join(repoRoot, "tracked.txt");
+        writeFileSync(filePath, "safe content\n", "utf-8");
+        execFileSync("git", ["add", "tracked.txt"], { cwd: repoRoot, stdio: "pipe" });
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "user.name=K6s Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "test commit",
+          ],
+          { cwd: repoRoot, stdio: "pipe" },
+        );
+
+        writeFileSync(filePath, "violating content\n", "utf-8");
+
+        const original = revertFile(filePath, repoRoot);
+
+        expect(original).toContain("violating content");
+        expect(readFileSync(filePath, "utf-8")).toBe("safe content\n");
+      } finally {
+        rmSync(repoRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("removes untracked files when strict revert runs", () => {
+      const repoRoot = mkdtempSync(path.join(tmpdir(), "k6s-boundary-revert-"));
+      try {
+        execFileSync("git", ["init"], { cwd: repoRoot, stdio: "pipe" });
+        const filePath = path.join(repoRoot, "untracked.txt");
+        writeFileSync(filePath, "new violating file\n", "utf-8");
+
+        const original = revertFile(filePath, repoRoot);
+
+        expect(original).toContain("new violating file");
+        expect(existsSync(filePath)).toBe(false);
+      } finally {
+        rmSync(repoRoot, { recursive: true, force: true });
+      }
     });
   });
 });

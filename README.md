@@ -23,7 +23,7 @@ Khoregos is built for this gap: structured, signed, queryable evidence for what 
 
 - **Audit trail.** Append-only session events with agent attribution, severity, and export options.
 - **Session governance.** Start, stop, and resume governed agent sessions with preserved context.
-- **Boundary controls.** Allowed/forbidden path rules with violation tracking.
+- **Boundary controls.** Allowed/forbidden path rules with advisory and strict enforcement (automatic revert via git).
 - **Collaboration safety.** File lock primitives to reduce multi-agent edit collisions.
 - **Sensitive change annotations.** Gate-style markers for files that need human review.
 - **Audit reporting.** Structured Markdown reports with session summary, event timeline, chain integrity verification, and boundary violations.
@@ -135,7 +135,7 @@ Khoregos is designed to make AI development reviewable and defensible.
 
 Upcoming and next-phase priorities:
 
-- **Phase 4.** Strict enforcement and plugin architecture.
+- **Phase 4.** Plugin architecture.
 - **Phase 5.** Compliance-ready reporting workflows, standards-oriented report generation, and checkpoint tooling.
 - **Phase 6.** Enterprise platform capabilities such as RBAC, SSO, and PostgreSQL-backed deployment models.
 
