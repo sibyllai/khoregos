@@ -3,7 +3,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
 import picomatch from "picomatch";
 import { ulid } from "ulid";
@@ -17,12 +17,28 @@ import {
 import { recordBoundaryViolation } from "./telemetry.js";
 
 export function revertFile(filePath: string, projectRoot: string): string | null {
-  // Capture violating content preview before attempting revert.
-  let originalContent: string | null = null;
+  const absPath = path.isAbsolute(filePath)
+    ? filePath
+    : path.join(projectRoot, filePath);
+
+  // Refuse to operate on symlinks — reading through them would capture
+  // the target's content, enabling data exfiltration via audit logs.
+  let isSymlink = false;
   try {
-    originalContent = readFileSync(filePath, "utf-8").slice(0, 4000);
+    isSymlink = lstatSync(absPath).isSymbolicLink();
   } catch {
-    // File may be deleted or unreadable.
+    // File may already be gone.
+  }
+
+  let originalContent: string | null = null;
+  if (isSymlink) {
+    originalContent = "[symlink — content not captured]";
+  } else {
+    try {
+      originalContent = readFileSync(absPath, "utf-8").slice(0, 4000);
+    } catch {
+      // File may be deleted or unreadable.
+    }
   }
 
   const relativePath = path.isAbsolute(filePath)
@@ -45,10 +61,13 @@ export function revertFile(filePath: string, projectRoot: string): string | null
       return originalContent;
     } catch {
       // Final fallback for untracked files not known to git index.
+      // Only delete if the resolved path is still under projectRoot.
       try {
-        const absPath = path.isAbsolute(filePath)
-          ? filePath
-          : path.join(projectRoot, filePath);
+        const resolvedRoot = path.resolve(projectRoot);
+        const resolvedTarget = path.resolve(absPath);
+        if (!resolvedTarget.startsWith(resolvedRoot + path.sep) && resolvedTarget !== resolvedRoot) {
+          return null;
+        }
         if (existsSync(absPath)) rmSync(absPath, { recursive: true, force: true });
         return originalContent;
       } catch {

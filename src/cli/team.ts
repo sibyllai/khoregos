@@ -409,6 +409,25 @@ export function registerTeamCommands(program: Command): void {
       }
 
       const config = loadConfig(configFile);
+      const hasStrictEnforcement = config.boundaries.some(
+        (boundary) => boundary.enforcement === "strict",
+      );
+      if (hasStrictEnforcement) {
+        try {
+          execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+            cwd: projectRoot,
+            stdio: "pipe",
+          });
+        } catch {
+          console.error(
+            chalk.red(
+              "Error: strict boundary enforcement requires a git repository.",
+            ),
+          );
+          process.exit(1);
+        }
+      }
+
       if (config.observability?.webhooks?.length) {
         setWebhookDispatcher(new WebhookDispatcher(config.observability.webhooks));
       } else {
