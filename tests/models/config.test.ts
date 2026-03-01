@@ -50,6 +50,24 @@ boundaries:
       expect(config.boundaries![0].pattern).toBe("*");
     });
 
+    it("parses max_tool_calls_per_session in boundary config", () => {
+      const yaml = `
+version: "1"
+project:
+  name: my-project
+boundaries:
+  - pattern: "*"
+    forbidden_paths: [".env*"]
+    enforcement: advisory
+    max_tool_calls_per_session: 5
+`;
+      const configPath = path.join(tempDir, "k6s.yaml");
+      writeFileSync(configPath, yaml);
+      const config = loadConfig(configPath);
+      expect(config.boundaries).toHaveLength(1);
+      expect(config.boundaries[0].max_tool_calls_per_session).toBe(5);
+    });
+
     it("throws on invalid YAML or schema", () => {
       const configPath = path.join(tempDir, "k6s.yaml");
       writeFileSync(configPath, "invalid: yaml: [[[");

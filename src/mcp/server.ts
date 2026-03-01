@@ -163,8 +163,20 @@ export class K6sServer {
           filesAffected: args.files,
         });
 
+        const limitWarning = args.agent_name
+          ? this.checkResourceLimit(args.agent_name)
+          : null;
+        const result = {
+          status: "logged",
+          event_id: event.id,
+          sequence: event.sequence,
+        };
+        const responseText = limitWarning
+          ? `${JSON.stringify(result)}\n\n${limitWarning}`
+          : JSON.stringify(result);
+
         return {
-          content: [{ type: "text", text: JSON.stringify({ status: "logged", event_id: event.id, sequence: event.sequence }) }],
+          content: [{ type: "text", text: responseText }],
         };
       },
     );
@@ -204,8 +216,20 @@ export class K6sServer {
           details: { key: args.key },
         });
 
+        const limitWarning = args.agent_name
+          ? this.checkResourceLimit(args.agent_name)
+          : null;
+        const result = {
+          status: "saved",
+          key: args.key,
+          updated_at: entry.updatedAt,
+        };
+        const responseText = limitWarning
+          ? `${JSON.stringify(result)}\n\n${limitWarning}`
+          : JSON.stringify(result);
+
         return {
-          content: [{ type: "text", text: JSON.stringify({ status: "saved", key: args.key, updated_at: entry.updatedAt }) }],
+          content: [{ type: "text", text: responseText }],
         };
       },
     );
@@ -284,7 +308,12 @@ export class K6sServer {
           });
         }
 
-        return { content: [{ type: "text", text: JSON.stringify(lockResultToDict(result)) }] };
+        const limitWarning = this.checkResourceLimit(args.agent_name);
+        const resultDict = lockResultToDict(result);
+        const responseText = limitWarning
+          ? `${JSON.stringify(resultDict)}\n\n${limitWarning}`
+          : JSON.stringify(resultDict);
+        return { content: [{ type: "text", text: responseText }] };
       },
     );
 
@@ -404,10 +433,32 @@ export class K6sServer {
           details: { task_id: args.task_id, status: args.status, progress: args.progress ?? "" },
         });
 
-        return { content: [{ type: "text", text: JSON.stringify({ status: "updated", task_id: args.task_id }) }] };
+        const limitWarning = args.agent_name
+          ? this.checkResourceLimit(args.agent_name)
+          : null;
+        const result = { status: "updated", task_id: args.task_id };
+        const responseText = limitWarning
+          ? `${JSON.stringify(result)}\n\n${limitWarning}`
+          : JSON.stringify(result);
+
+        return { content: [{ type: "text", text: responseText }] };
       },
     );
 
+  }
+
+  private checkResourceLimit(agentName: string): string | null {
+    const boundary = this.boundaryEnforcer.getBoundaryForAgent(agentName);
+    const limit = boundary?.max_tool_calls_per_session;
+    if (limit == null) return null;
+
+    const agent = this.stateManager.getAgentByName(this.sessionId, agentName);
+    if (!agent) return null;
+
+    if (agent.toolCallCount > limit) {
+      return `RESOURCE_LIMIT_WARNING: Agent '${agentName}' has exceeded the maximum tool calls per session (${agent.toolCallCount}/${limit}). Consider reducing scope or ending your session.`;
+    }
+    return null;
   }
 
   private registerResources(): void {

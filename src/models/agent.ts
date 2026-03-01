@@ -23,6 +23,7 @@ export const AgentSchema = z.object({
   boundaryConfig: z.string().nullable().default(null),
   metadata: z.string().nullable().default(null),
   claudeSessionId: z.string().nullable().default(null),
+  toolCallCount: z.number().default(0),
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
@@ -37,6 +38,7 @@ export function agentToDbRow(a: Agent): Row {
     spawned_at: a.spawnedAt,
     boundary_config: a.boundaryConfig,
     metadata: a.metadata,
+    tool_call_count: a.toolCallCount,
   };
   if (a.claudeSessionId != null) row.claude_session_id = a.claudeSessionId;
   return row;
@@ -54,6 +56,7 @@ export function agentFromDbRow(row: Row): Agent {
     boundaryConfig: (row.boundary_config as string) ?? null,
     metadata: (row.metadata as string) ?? null,
     claudeSessionId: (row.claude_session_id as string) ?? null,
+    toolCallCount: (row.tool_call_count as number) ?? 0,
   };
 }
 

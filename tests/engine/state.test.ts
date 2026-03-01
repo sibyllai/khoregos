@@ -154,6 +154,17 @@ describe("StateManager", () => {
       const agents = state.listAgents(sessionId);
       expect(agents.length).toBeGreaterThanOrEqual(1);
     });
+
+    it("incrementToolCallCount increments and persists per agent", () => {
+      const agent = state.registerAgent({ sessionId, name: "limit-check" });
+      const c1 = state.incrementToolCallCount(agent.id);
+      const c2 = state.incrementToolCallCount(agent.id);
+      expect(c1).toBe(1);
+      expect(c2).toBe(2);
+      const updated = state.getAgent(agent.id);
+      expect(updated).not.toBeNull();
+      expect(updated!.toolCallCount).toBe(2);
+    });
   });
 
   describe("context", () => {

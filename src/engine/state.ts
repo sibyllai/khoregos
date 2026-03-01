@@ -146,6 +146,7 @@ export class StateManager {
         : null,
       metadata: null,
       claudeSessionId: null,
+      toolCallCount: 0,
     };
     this.db.insert("agents", agentToDbRow(agent));
     return agent;
@@ -208,6 +209,17 @@ export class StateManager {
 
   updateAgent(agent: Agent): void {
     this.db.update("agents", agentToDbRow(agent), "id = ?", [agent.id]);
+  }
+
+  incrementToolCallCount(agentId: string): number {
+    this.db.db
+      .prepare("UPDATE agents SET tool_call_count = tool_call_count + 1 WHERE id = ?")
+      .run(agentId);
+    const row = this.db.fetchOne(
+      "SELECT tool_call_count FROM agents WHERE id = ?",
+      [agentId],
+    );
+    return (row?.tool_call_count as number) ?? 0;
   }
 
   // Context management

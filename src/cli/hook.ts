@@ -15,6 +15,7 @@ import { Command } from "commander";
 import { loadConfigOrDefault } from "../models/config.js";
 import { DaemonState } from "../daemon/manager.js";
 import { AuditLogger, setWebhookDispatcher } from "../engine/audit.js";
+import { BoundaryEnforcer } from "../engine/boundaries.js";
 import { StateManager } from "../engine/state.js";
 import { classifySeverity, extractPathsFromBashCommand } from "../engine/severity.js";
 import { loadSigningKey } from "../engine/signing.js";
@@ -326,6 +327,43 @@ export function registerHookCommands(program: Command): void {
           });
         }
         agentId = fallback.id;
+      }
+
+      // Track tool call count for resource limit enforcement.
+      const newCount = sm.incrementToolCallCount(agentId);
+
+      // Check whether this call crosses the configured per-agent limit.
+      const resourceConfigPath = path.join(projectRoot, "k6s.yaml");
+      if (existsSync(resourceConfigPath)) {
+        const limitConfig = loadConfigOrDefault(resourceConfigPath, "project");
+        const be = new BoundaryEnforcer(
+          db,
+          sessionId,
+          projectRoot,
+          limitConfig.boundaries,
+        );
+        const agentObj = sm.getAgent(agentId);
+        const agentName = agentObj?.name ?? "unknown";
+        const boundary = be.getBoundaryForAgent(agentName);
+        const limit = boundary?.max_tool_calls_per_session;
+        if (limit != null && newCount > limit && newCount === limit + 1) {
+          // Log only on first exceedance to avoid audit spam.
+          const exceedLogger = new AuditLogger(db, sessionId, traceId, signingKey);
+          exceedLogger.start();
+          exceedLogger.log({
+            eventType: "boundary_violation",
+            action: `resource limit exceeded: agent '${agentName}' has made ${newCount} tool calls (limit: ${limit})`,
+            agentId,
+            details: {
+              limit_type: "tool_calls",
+              current: newCount,
+              limit,
+              agent_name: agentName,
+            },
+            severity: "warning",
+          });
+          exceedLogger.stop();
+        }
       }
 
       const details: Record<string, unknown> = {

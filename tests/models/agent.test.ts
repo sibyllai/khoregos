@@ -36,6 +36,7 @@ describe("agent model", () => {
       expect(agent.role).toBe("teammate");
       expect(agent.state).toBe("active");
       expect(agent.claudeSessionId).toBeNull();
+      expect(agent.toolCallCount).toBe(0);
     });
   });
 
@@ -52,16 +53,19 @@ describe("agent model", () => {
         boundaryConfig: '{"allowed":["src/**"]}',
         metadata: null,
         claudeSessionId: "claude-1",
+        toolCallCount: 3,
       };
       const row = agentToDbRow(agent);
       expect(row.name).toBe(agent.name);
       expect(row.role).toBe(agent.role);
       expect(row.claude_session_id).toBe(agent.claudeSessionId);
+      expect(row.tool_call_count).toBe(agent.toolCallCount);
 
       const back = agentFromDbRow(row);
       expect(back.id).toBe(agent.id);
       expect(back.name).toBe(agent.name);
       expect(back.claudeSessionId).toBe(agent.claudeSessionId);
+      expect(back.toolCallCount).toBe(agent.toolCallCount);
     });
   });
 
