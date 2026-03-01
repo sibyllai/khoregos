@@ -15,7 +15,7 @@ import { Command } from "commander";
 import { loadConfigOrDefault } from "../models/config.js";
 import { DaemonState } from "../daemon/manager.js";
 import { AuditLogger, setWebhookDispatcher } from "../engine/audit.js";
-import { BoundaryEnforcer } from "../engine/boundaries.js";
+import { BoundaryEnforcer, revertFile } from "../engine/boundaries.js";
 import { StateManager } from "../engine/state.js";
 import { classifySeverity, extractPathsFromBashCommand } from "../engine/severity.js";
 import { loadSigningKey } from "../engine/signing.js";
@@ -261,6 +261,8 @@ export function registerHookCommands(program: Command): void {
 
     const toolName = (data.tool_name as string) ?? "unknown";
     const toolInput = data.tool_input as Record<string, unknown> | undefined;
+    const WRITE_TOOLS = new Set(["Write", "Edit", "Bash", "MultiEdit"]);
+    const isWriteOp = WRITE_TOOLS.has(toolName);
     // Claude Code sends tool output as "tool_response".
     const toolResponse = data.tool_response ?? data.tool_result ?? data.result;
 
@@ -331,38 +333,90 @@ export function registerHookCommands(program: Command): void {
 
       // Track tool call count for resource limit enforcement.
       const newCount = sm.incrementToolCallCount(agentId);
+      const agentObj = sm.getAgent(agentId);
+      const agentName = agentObj?.name ?? "unknown";
+
+      // Load config once and reuse for strict boundary and gate checks.
+      const configPath = path.join(projectRoot, "k6s.yaml");
+      const config = existsSync(configPath)
+        ? loadConfigOrDefault(configPath, "project")
+        : null;
+      const be = config
+        ? new BoundaryEnforcer(
+            db,
+            sessionId,
+            projectRoot,
+            config.boundaries,
+          )
+        : null;
+      const boundary = be?.getBoundaryForAgent(agentName) ?? null;
 
       // Check whether this call crosses the configured per-agent limit.
-      const resourceConfigPath = path.join(projectRoot, "k6s.yaml");
-      if (existsSync(resourceConfigPath)) {
-        const limitConfig = loadConfigOrDefault(resourceConfigPath, "project");
-        const be = new BoundaryEnforcer(
-          db,
-          sessionId,
-          projectRoot,
-          limitConfig.boundaries,
-        );
-        const agentObj = sm.getAgent(agentId);
-        const agentName = agentObj?.name ?? "unknown";
-        const boundary = be.getBoundaryForAgent(agentName);
-        const limit = boundary?.max_tool_calls_per_session;
-        if (limit != null && newCount > limit && newCount === limit + 1) {
-          // Log only on first exceedance to avoid audit spam.
-          const exceedLogger = new AuditLogger(db, sessionId, traceId, signingKey);
-          exceedLogger.start();
-          exceedLogger.log({
+      const limit = boundary?.max_tool_calls_per_session;
+      if (limit != null && newCount > limit && newCount === limit + 1) {
+        // Log only on first exceedance to avoid audit spam.
+        const exceedLogger = new AuditLogger(db, sessionId, traceId, signingKey);
+        exceedLogger.start();
+        exceedLogger.log({
+          eventType: "boundary_violation",
+          action: `resource limit exceeded: agent '${agentName}' has made ${newCount} tool calls (limit: ${limit})`,
+          agentId,
+          details: {
+            limit_type: "tool_calls",
+            current: newCount,
+            limit,
+            agent_name: agentName,
+          },
+          severity: "warning",
+        });
+        exceedLogger.stop();
+      }
+
+      // Strict boundary enforcement: revert out-of-bounds writes post-tool-use.
+      if (isWriteOp && filesAffected.length && be && boundary?.enforcement === "strict") {
+        for (const fp of filesAffected) {
+          const absPath = path.isAbsolute(fp) ? fp : path.join(projectRoot, fp);
+          const [allowed, reason] = be.checkPathAllowed(absPath, agentName);
+          if (allowed) continue;
+
+          const originalContent = revertFile(absPath, projectRoot);
+          const relativePath = path.isAbsolute(fp)
+            ? path.relative(projectRoot, fp)
+            : fp;
+          const enforcementAction =
+            originalContent !== null ? "reverted" : "revert_failed";
+          const violationType =
+            reason?.includes("forbidden pattern") === true
+              ? "forbidden_path"
+              : "outside_allowed";
+
+          be.recordViolation({
+            filePath: relativePath,
+            agentId,
+            violationType,
+            enforcementAction,
+            details: {
+              reason,
+              original_content: originalContent,
+            },
+          });
+
+          const revertLogger = new AuditLogger(db, sessionId, traceId, signingKey);
+          revertLogger.start();
+          revertLogger.log({
             eventType: "boundary_violation",
-            action: `resource limit exceeded: agent '${agentName}' has made ${newCount} tool calls (limit: ${limit})`,
+            action: `strict enforcement: reverted ${relativePath} - ${reason ?? "boundary violation"}`,
             agentId,
             details: {
-              limit_type: "tool_calls",
-              current: newCount,
-              limit,
-              agent_name: agentName,
+              enforcement_action: enforcementAction,
+              file: relativePath,
+              reason: reason ?? null,
+              original_content_preview: originalContent?.slice(0, 500) ?? null,
             },
-            severity: "warning",
+            filesAffected: [relativePath],
+            severity: "critical",
           });
-          exceedLogger.stop();
+          revertLogger.stop();
         }
       }
 
@@ -407,9 +461,6 @@ export function registerHookCommands(program: Command): void {
       });
       logger.stop();
 
-      const agentName = agentId
-        ? sm.getAgent(agentId)?.name ?? "primary"
-        : "primary";
       const tracer = getTracer();
       tracer.startActiveSpan(
         "tool.use",
@@ -431,12 +482,7 @@ export function registerHookCommands(program: Command): void {
       // Sensitive-file annotation: log a sensitive_needs_review audit event when
       // write operations touch files matching configured gate patterns.
       // This is a passive audit marker — no interactive workflow.
-      const WRITE_TOOLS = new Set(["Write", "Edit", "Bash", "MultiEdit"]);
-      const isWriteOp = WRITE_TOOLS.has(toolName);
-
-      const configPath = path.join(projectRoot, "k6s.yaml");
-      if (isWriteOp && filesAffected.length && existsSync(configPath)) {
-        const config = loadConfigOrDefault(configPath, "project");
+      if (isWriteOp && filesAffected.length && config) {
         const matcher = new ReviewPatternMatcher(config.gates ?? []);
         for (const fp of filesAffected) {
           const relative = path.isAbsolute(fp)
