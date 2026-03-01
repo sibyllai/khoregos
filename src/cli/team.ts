@@ -17,7 +17,11 @@ import {
   removeClaudeMdGovernance,
   unregisterHooks,
 } from "../daemon/manager.js";
-import { AuditLogger, pruneAuditEvents } from "../engine/audit.js";
+import {
+  AuditLogger,
+  pruneAuditEvents,
+  setWebhookDispatcher,
+} from "../engine/audit.js";
 import { loadSigningKey } from "../engine/signing.js";
 import {
   initTelemetry,
@@ -30,6 +34,7 @@ import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
 import { type Session, type SessionState } from "../models/session.js";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
+import { WebhookDispatcher } from "../engine/webhooks.js";
 import { VERSION } from "../version.js";
 
 function getGitContext(projectRoot: string): {
@@ -170,6 +175,11 @@ export function registerTeamCommands(program: Command): void {
       }
 
       const config = loadConfig(configFile);
+      if (config.observability?.webhooks?.length) {
+        setWebhookDispatcher(new WebhookDispatcher(config.observability.webhooks));
+      } else {
+        setWebhookDispatcher(null);
+      }
       const prometheusEnabled = config.observability?.prometheus?.enabled === true;
 
       if (config.observability?.opentelemetry?.enabled) {
@@ -321,11 +331,15 @@ export function registerTeamCommands(program: Command): void {
       const state = daemon.readState();
       const sessionId = (state.session_id as string) ?? "unknown";
 
-      // Initialize tracing so the session.stop span is exported via OTLP.
+      // Initialize tracing and webhooks so the session.stop span and any
+      // audit events logged during teardown are dispatched correctly.
       if (existsSync(configFile)) {
         const config = loadConfig(configFile);
         const prometheusEnabled = config.observability?.prometheus?.enabled === true;
         initTelemetry(config, { skipMetrics: prometheusEnabled });
+        if (config.observability?.webhooks?.length) {
+          setWebhookDispatcher(new WebhookDispatcher(config.observability.webhooks));
+        }
       }
 
       const tracer = getTracer();
@@ -343,6 +357,7 @@ export function registerTeamCommands(program: Command): void {
       daemon.removeState();
       stopTelemetryDaemon(projectRoot);
 
+      setWebhookDispatcher(null);
       await shutdownTelemetry();
 
       console.log(chalk.green("✓") + ` Session ${sessionId.slice(0, 8)}... stopped`);
@@ -374,6 +389,13 @@ export function registerTeamCommands(program: Command): void {
         process.exit(1);
       }
 
+      const config = loadConfig(configFile);
+      if (config.observability?.webhooks?.length) {
+        setWebhookDispatcher(new WebhookDispatcher(config.observability.webhooks));
+      } else {
+        setWebhookDispatcher(null);
+      }
+
       const result = withDb(projectRoot, (db) => {
         const sm = new StateManager(db, projectRoot);
 
@@ -388,7 +410,6 @@ export function registerTeamCommands(program: Command): void {
         if (!prev) return null;
 
         const context = sm.generateResumeContext(prev.id);
-        const config = loadConfig(configFile);
         const prometheusEnabled = config.observability?.prometheus?.enabled === true;
 
         if (config.observability?.opentelemetry?.enabled) {

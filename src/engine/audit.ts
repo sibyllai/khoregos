@@ -16,6 +16,13 @@ import {
 } from "../models/audit.js";
 import { computeHmac, genesisValue } from "./signing.js";
 import { recordAuditEvent } from "./telemetry.js";
+import type { WebhookDispatcher } from "./webhooks.js";
+
+let globalWebhookDispatcher: WebhookDispatcher | null = null;
+
+export function setWebhookDispatcher(dispatcher: WebhookDispatcher | null): void {
+  globalWebhookDispatcher = dispatcher;
+}
 
 export class AuditLogger {
   private sequence = 0;
@@ -91,6 +98,12 @@ export class AuditLogger {
 
     this.db.insert("audit_events", auditEventToDbRow(event));
     recordAuditEvent(event.eventType, event.severity);
+    if (globalWebhookDispatcher) {
+      globalWebhookDispatcher.dispatch(event, {
+        sessionId: this.sessionId,
+        traceId: this.traceId ?? undefined,
+      });
+    }
     return event;
   }
 
