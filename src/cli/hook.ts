@@ -248,6 +248,10 @@ export function registerHookCommands(program: Command): void {
     .description("Claude Code hook handlers (internal)")
     .helpOption(false);
 
+  // Plugin managers are intentionally not loaded in hook subprocesses.
+  // Hooks must stay fast and stateless, so plugin-specific hooks fire only
+  // from the main CLI process where the PluginManager is initialized.
+
   hook.command("post-tool-use").action(async () => {
     const projectRoot = resolveHookProjectRoot();
     if (!projectRoot) return;
