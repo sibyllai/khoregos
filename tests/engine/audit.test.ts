@@ -4,7 +4,11 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Db } from "../../src/store/db.js";
-import { AuditLogger, pruneAuditEvents } from "../../src/engine/audit.js";
+import {
+  AuditLogger,
+  pruneAuditEvents,
+  setWebhookDispatcher,
+} from "../../src/engine/audit.js";
 import { getTempDbPath, cleanupTempDir } from "../helpers.js";
 import { randomBytes } from "node:crypto";
 import { generateSigningKey, loadSigningKey } from "../../src/engine/signing.js";
@@ -13,6 +17,8 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { sessionToDbRow } from "../../src/models/session.js";
 import type { Session } from "../../src/models/session.js";
+import { WebhookDispatcher } from "../../src/engine/webhooks.js";
+import { vi } from "vitest";
 
 describe("AuditLogger", () => {
   let db: Db;
@@ -130,6 +136,29 @@ describe("AuditLogger", () => {
         action: "resume test",
       });
       expect(event.sequence).toBe(countBefore + 1);
+    });
+
+    it("dispatches webhook side effects after persisting an audit event", () => {
+      const dispatcher = new WebhookDispatcher([]);
+      const dispatchSpy = vi
+        .spyOn(dispatcher, "dispatch")
+        .mockImplementation(() => {});
+      setWebhookDispatcher(dispatcher);
+      try {
+        const logger = new AuditLogger(db, sessionId, "trace-123", signingKey!);
+        logger.start();
+        const event = logger.log({
+          eventType: "tool_use",
+          action: "webhook dispatch test",
+        });
+        expect(dispatchSpy).toHaveBeenCalledTimes(1);
+        expect(dispatchSpy).toHaveBeenCalledWith(event, {
+          sessionId,
+          traceId: "trace-123",
+        });
+      } finally {
+        setWebhookDispatcher(null);
+      }
     });
   });
 

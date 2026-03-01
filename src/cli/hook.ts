@@ -14,7 +14,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { loadConfigOrDefault } from "../models/config.js";
 import { DaemonState } from "../daemon/manager.js";
-import { AuditLogger } from "../engine/audit.js";
+import { AuditLogger, setWebhookDispatcher } from "../engine/audit.js";
 import { StateManager } from "../engine/state.js";
 import { classifySeverity, extractPathsFromBashCommand } from "../engine/severity.js";
 import { loadSigningKey } from "../engine/signing.js";
@@ -29,6 +29,7 @@ import { detectDependencyChanges } from "../engine/dependencies.js";
 import { ReviewPatternMatcher } from "../watcher/fs.js";
 import { Db } from "../store/db.js";
 import type { EventType } from "../models/audit.js";
+import { WebhookDispatcher } from "../engine/webhooks.js";
 
 // Maximum bytes to read from stdin before aborting (1 MB).
 // Hook payloads are small JSON objects; anything larger is anomalous.
@@ -182,6 +183,20 @@ export function extractDurationMs(data: Record<string, unknown>): number | undef
   return duration;
 }
 
+function configureHookWebhooks(projectRoot: string): void {
+  const configPath = path.join(projectRoot, "k6s.yaml");
+  if (!existsSync(configPath)) {
+    setWebhookDispatcher(null);
+    return;
+  }
+  const config = loadConfigOrDefault(configPath, "project");
+  if (config.observability?.webhooks?.length) {
+    setWebhookDispatcher(new WebhookDispatcher(config.observability.webhooks));
+  } else {
+    setWebhookDispatcher(null);
+  }
+}
+
 /**
  * Initialize OTel in hook subprocess. Hooks are short-lived processes,
  * so the SDK must be initialized per invocation for spans/metrics to export.
@@ -237,6 +252,8 @@ export function registerHookCommands(program: Command): void {
     if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
     if (!sessionId) return;
+    configureHookWebhooks(projectRoot);
+    initHookTelemetry(projectRoot);
 
     const data = readHookInput();
     if (!Object.keys(data).length) return;
@@ -352,7 +369,6 @@ export function registerHookCommands(program: Command): void {
       });
       logger.stop();
 
-      initHookTelemetry(projectRoot);
       const agentName = agentId
         ? sm.getAgent(agentId)?.name ?? "primary"
         : "primary";
@@ -460,6 +476,8 @@ export function registerHookCommands(program: Command): void {
     if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
     if (!sessionId) return;
+    configureHookWebhooks(projectRoot);
+    initHookTelemetry(projectRoot);
 
     const data = readHookInput();
     if (!Object.keys(data).length) return;
@@ -490,7 +508,6 @@ export function registerHookCommands(program: Command): void {
         },
         agentId: agent.id,
       });
-      initHookTelemetry(projectRoot);
       const tracer = getTracer();
       tracer.startActiveSpan(
         "agent.spawn",
@@ -511,6 +528,8 @@ export function registerHookCommands(program: Command): void {
     if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
     if (!sessionId) return;
+    configureHookWebhooks(projectRoot);
+    initHookTelemetry(projectRoot);
 
     const data = readHookInput();
     if (!Object.keys(data).length) return;
@@ -547,7 +566,6 @@ export function registerHookCommands(program: Command): void {
         },
       });
       logger.stop();
-      initHookTelemetry(projectRoot);
       const tracer = getTracer();
       tracer.startActiveSpan("agent.stop", (span) => {
         span.end();
@@ -564,6 +582,7 @@ export function registerHookCommands(program: Command): void {
     if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
     if (!sessionId) return;
+    configureHookWebhooks(projectRoot);
 
     const data = readHookInput();
 
