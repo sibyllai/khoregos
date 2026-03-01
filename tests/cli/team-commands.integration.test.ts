@@ -78,6 +78,7 @@ vi.mock("../../src/engine/audit.js", () => ({
     stop(): void {}
   },
   pruneAuditEvents: vi.fn(),
+  setWebhookDispatcher: vi.fn(),
 }));
 
 vi.mock("../../src/store/db.js", () => ({
@@ -112,6 +113,7 @@ vi.mock("../../src/engine/state.js", () => ({
 }));
 
 vi.mock("../../src/engine/telemetry.js", () => ({
+  initTelemetry: vi.fn(),
   getTracer: () => ({
     startActiveSpan: (_name: string, _opts: unknown, fn: (span: { end: () => void }) => void) =>
       fn({ end: () => {} }),
