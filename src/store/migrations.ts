@@ -2,7 +2,7 @@
  * Database schema migrations for Khoregos.
  */
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 type Migration = [version: number, sql: string];
 
@@ -147,6 +147,13 @@ const MIGRATIONS: Migration[] = [
     `
     -- Session: correlation / trace ID for linking to external observability.
     ALTER TABLE sessions ADD COLUMN trace_id TEXT;
+    `,
+  ],
+  [
+    4,
+    `
+    -- Agent tool call tracking for resource limits.
+    ALTER TABLE agents ADD COLUMN tool_call_count INTEGER DEFAULT 0;
     `,
   ],
 ];

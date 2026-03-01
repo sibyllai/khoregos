@@ -26,6 +26,7 @@ export const BoundaryConfigSchema = z.object({
   allowed_paths: z.array(z.string()).default([]),
   forbidden_paths: z.array(z.string()).default([]),
   enforcement: z.enum(["advisory", "strict"]).default("advisory"),
+  max_tool_calls_per_session: z.number().positive().optional(),
 });
 export type BoundaryConfig = z.infer<typeof BoundaryConfigSchema>;
 

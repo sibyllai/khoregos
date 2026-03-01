@@ -24,6 +24,7 @@ const TABLE_SCHEMA: Record<string, ReadonlySet<string>> = {
   agents: new Set([
     "id", "session_id", "name", "role", "specialization", "state",
     "spawned_at", "boundary_config", "metadata", "claude_session_id",
+    "tool_call_count",
   ]),
   audit_events: new Set([
     "id", "sequence", "session_id", "agent_id", "timestamp",

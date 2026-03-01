@@ -36,6 +36,12 @@ describe("Db", () => {
       expect(row?.v).toBe(db.schemaVersion);
     });
 
+    it("includes tool_call_count column on agents table", () => {
+      const rows = db.fetchAll("PRAGMA table_info(agents)");
+      const names = rows.map((r) => String(r.name));
+      expect(names).toContain("tool_call_count");
+    });
+
     it("allows connect to be called repeatedly", () => {
       expect(() => db.connect()).not.toThrow();
       const row = db.fetchOne("SELECT 1 as v");
