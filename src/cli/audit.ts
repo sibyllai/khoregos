@@ -11,6 +11,7 @@ import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
 import { AuditLogger, pruneAuditEvents } from "../engine/audit.js";
 import { loadSigningKey, verifyChain } from "../engine/signing.js";
+import { generateAuditReport } from "../engine/report.js";
 import { loadConfigOrDefault } from "../models/config.js";
 import type {
   AuditEvent,
@@ -440,6 +441,38 @@ export function registerAuditCommands(program: Command): void {
                 : chalk.yellow("UNSIGNED");
           console.log(`  ${prefix} seq ${err.sequence}: ${err.message}`);
         }
+      }
+    });
+
+  audit
+    .command("report")
+    .description("Generate a structured audit report for a session")
+    .option("-s, --session <id>", "Session ID or 'latest'", "latest")
+    .option("-o, --output <file>", "Write report to file (stdout if omitted)")
+    .action((opts: { session: string; output?: string }) => {
+      const projectRoot = process.cwd();
+      if (!existsSync(path.join(projectRoot, ".khoregos", "k6s.db"))) {
+        console.log(chalk.yellow("No audit data found."));
+        return;
+      }
+
+      const report = withDb(projectRoot, (db) => {
+        const sm = new StateManager(db, projectRoot);
+        const sessionId = resolveSessionId(sm, opts.session);
+        if (!sessionId) return null;
+        return generateAuditReport(db, sessionId, projectRoot);
+      });
+
+      if (!report) {
+        console.log(chalk.yellow("No session found."));
+        return;
+      }
+
+      if (opts.output) {
+        writeFileSync(opts.output, report);
+        console.log(chalk.green("✓") + ` Wrote audit report to ${opts.output}`);
+      } else {
+        console.log(report);
       }
     });
 }
