@@ -42,6 +42,16 @@ import { StateManager } from "../engine/state.js";
 import { WebhookDispatcher } from "../engine/webhooks.js";
 import { VERSION } from "../version.js";
 
+const SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH = 200;
+
+function formatSessionStartAction(objective: string): string {
+  const normalizedObjective = objective.replace(/\s+/g, " ").trim();
+  const truncatedObjective = normalizedObjective.length > SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH
+    ? `${normalizedObjective.slice(0, SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH - 3)}...`
+    : normalizedObjective;
+  return `session started: ${truncatedObjective}`;
+}
+
 function getGitContext(projectRoot: string): {
   branch: string | null;
   sha: string | null;
@@ -250,7 +260,7 @@ export function registerTeamCommands(program: Command): void {
         logger.start();
         logger.log({
           eventType: "session_start",
-          action: "session started",
+          action: formatSessionStartAction(objective),
           details: {
             objective,
             operator: s.operator,
@@ -458,7 +468,7 @@ export function registerTeamCommands(program: Command): void {
         const sm = new StateManager(db, projectRoot);
 
         let prev: Session | null = null;
-        if (sessionId) {
+        if (sessionId && sessionId !== "latest") {
           prev = sm.getSession(sessionId);
         } else {
           const sessions = sm.listSessions({ limit: 1 });
@@ -512,6 +522,19 @@ export function registerTeamCommands(program: Command): void {
           },
         );
         recordSessionStart();
+
+        const teamKey = loadSigningKey(khoregoDir);
+        const logger = new AuditLogger(db, newSession.id, newSession.traceId, teamKey);
+        logger.start();
+        logger.log({
+          eventType: "session_start",
+          action: formatSessionStartAction(newSession.objective),
+          details: {
+            objective: newSession.objective,
+            resumed_from_session_id: prev.id,
+          },
+        });
+        logger.stop();
 
         return { prev, newSession };
       });

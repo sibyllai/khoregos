@@ -13,6 +13,9 @@ const registerHooksMock = vi.fn();
 const unregisterHooksMock = vi.fn();
 const injectClaudeMdGovernanceMock = vi.fn();
 const removeClaudeMdGovernanceMock = vi.fn();
+const auditLoggerStartMock = vi.fn();
+const auditLoggerLogMock = vi.fn();
+const auditLoggerStopMock = vi.fn();
 const loadConfigMock = vi.fn(() => ({
   version: "1",
   project: { name: "test" },
@@ -74,9 +77,15 @@ vi.mock("../../src/engine/signing.js", () => ({
 
 vi.mock("../../src/engine/audit.js", () => ({
   AuditLogger: class {
-    start(): void {}
-    log(): void {}
-    stop(): void {}
+    start(): void {
+      auditLoggerStartMock();
+    }
+    log(event: unknown): void {
+      auditLoggerLogMock(event);
+    }
+    stop(): void {
+      auditLoggerStopMock();
+    }
   },
   pruneAuditEvents: vi.fn(),
   setWebhookDispatcher: vi.fn(),
@@ -110,6 +119,26 @@ vi.mock("../../src/engine/state.js", () => ({
     updateSession(): void {}
     markSessionActive(): void {}
     markSessionCompleted(): void {}
+    getSession(sessionId: string) {
+      return {
+        id: sessionId,
+        objective: "resume objective",
+        operator: "test-operator",
+      };
+    }
+    listSessions() {
+      return [
+        {
+          id: "prev-session",
+          objective: "latest resume objective",
+          operator: "test-operator",
+        },
+      ];
+    }
+    generateResumeContext(): string {
+      return "resume context";
+    }
+    saveContext(): void {}
   },
 }));
 
@@ -163,6 +192,9 @@ describe("team commands integration", () => {
     injectClaudeMdGovernanceMock.mockClear();
     removeClaudeMdGovernanceMock.mockClear();
     loadConfigMock.mockClear();
+    auditLoggerStartMock.mockClear();
+    auditLoggerLogMock.mockClear();
+    auditLoggerStopMock.mockClear();
     killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       throw new Error(`process.exit:${code ?? 0}`);
@@ -246,5 +278,53 @@ describe("team commands integration", () => {
     expect(registerMcpServerMock).not.toHaveBeenCalled();
     expect(registerHooksMock).not.toHaveBeenCalled();
     stderrSpy.mockRestore();
+  });
+
+  it("team start logs session_start action with objective and truncates long text", async () => {
+    const { registerTeamCommands } = await import("../../src/cli/team.js");
+    const program = new Command();
+    registerTeamCommands(program);
+
+    const longObjective = `${"x".repeat(210)}\n${"y".repeat(20)}`;
+    await program.parseAsync(["team", "start", longObjective], { from: "user" });
+
+    const loggedEvent = auditLoggerLogMock.mock.calls[0]?.[0] as
+      | { eventType?: string; action?: string; details?: { objective?: string } }
+      | undefined;
+    expect(loggedEvent?.eventType).toBe("session_start");
+    expect(loggedEvent?.action).toBe(`session started: ${"x".repeat(197)}...`);
+    expect(loggedEvent?.details?.objective).toBe(longObjective);
+  });
+
+  it("team resume logs session_start action with resumed objective", async () => {
+    const { registerTeamCommands } = await import("../../src/cli/team.js");
+    const program = new Command();
+    registerTeamCommands(program);
+
+    await program.parseAsync(["team", "resume", "previous-session"], { from: "user" });
+
+    const loggedEvent = auditLoggerLogMock.mock.calls[0]?.[0] as
+      | { eventType?: string; action?: string; details?: { objective?: string; resumed_from_session_id?: string } }
+      | undefined;
+    expect(loggedEvent?.eventType).toBe("session_start");
+    expect(loggedEvent?.action).toBe("session started: resume objective");
+    expect(loggedEvent?.details?.objective).toBe("resume objective");
+    expect(loggedEvent?.details?.resumed_from_session_id).toBe("previous-session");
+  });
+
+  it("team resume latest resolves to the newest session", async () => {
+    const { registerTeamCommands } = await import("../../src/cli/team.js");
+    const program = new Command();
+    registerTeamCommands(program);
+
+    await program.parseAsync(["team", "resume", "latest"], { from: "user" });
+
+    const loggedEvent = auditLoggerLogMock.mock.calls[0]?.[0] as
+      | { eventType?: string; action?: string; details?: { objective?: string; resumed_from_session_id?: string } }
+      | undefined;
+    expect(loggedEvent?.eventType).toBe("session_start");
+    expect(loggedEvent?.action).toBe("session started: latest resume objective");
+    expect(loggedEvent?.details?.objective).toBe("latest resume objective");
+    expect(loggedEvent?.details?.resumed_from_session_id).toBe("prev-session");
   });
 });
