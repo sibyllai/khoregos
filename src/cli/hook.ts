@@ -25,6 +25,7 @@ import {
   recordActiveAgentDelta,
   recordToolDurationSeconds,
 } from "../engine/telemetry.js";
+import { detectDependencyChanges } from "../engine/dependencies.js";
 import { ReviewPatternMatcher } from "../watcher/fs.js";
 import { Db } from "../store/db.js";
 import type { EventType } from "../models/audit.js";
@@ -402,6 +403,45 @@ export function registerHookCommands(program: Command): void {
                 trigger_event_id: event.id,
               },
               filesAffected: [relative],
+              severity: "warning",
+            });
+            logger.stop();
+          }
+        }
+      }
+
+      // Dependency change detection: when package.json is modified,
+      // diff against the last committed version and log granular events.
+      if (filesAffected.length) {
+        const depFiles = filesAffected.filter((fp) => path.basename(fp) === "package.json");
+        for (const depFile of depFiles) {
+          const absPath = path.isAbsolute(depFile) ? depFile : path.join(projectRoot, depFile);
+          const changes = detectDependencyChanges(absPath, projectRoot);
+          for (const change of changes) {
+            const eventType: EventType =
+              change.type === "added"
+                ? "dependency_added"
+                : change.type === "removed"
+                  ? "dependency_removed"
+                  : "dependency_updated";
+            const versionInfo =
+              change.type === "updated"
+                ? `${change.oldVersion} → ${change.newVersion}`
+                : change.type === "added"
+                  ? change.newVersion ?? ""
+                  : change.oldVersion ?? "";
+            logger.start();
+            logger.log({
+              eventType,
+              action: `dependency ${change.type}: ${change.name} ${versionInfo}`.trim(),
+              agentId,
+              details: {
+                name: change.name,
+                old_version: change.oldVersion ?? null,
+                new_version: change.newVersion ?? null,
+                file: depFile,
+              },
+              filesAffected: [depFile],
               severity: "warning",
             });
             logger.stop();
