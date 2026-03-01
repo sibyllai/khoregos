@@ -59,11 +59,15 @@ function parseStringArray(value: string | null): string[] {
   return [];
 }
 
+function escapeCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function renderTable(headers: string[], rows: string[][]): string[] {
   const out: string[] = [];
-  out.push(`| ${headers.join(" | ")} |`);
+  out.push(`| ${headers.map(escapeCell).join(" | ")} |`);
   out.push(`|${headers.map(() => "------").join("|")}|`);
-  out.push(...rows.map((row) => `| ${row.join(" | ")} |`));
+  out.push(...rows.map((row) => `| ${row.map(escapeCell).join(" | ")} |`));
   return out;
 }
 
