@@ -20,6 +20,7 @@ import {
 import {
   AuditLogger,
   pruneAuditEvents,
+  pruneSessions,
   setWebhookDispatcher,
 } from "../engine/audit.js";
 import { loadSigningKey } from "../engine/signing.js";
@@ -41,6 +42,16 @@ import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
 import { WebhookDispatcher } from "../engine/webhooks.js";
 import { VERSION } from "../version.js";
+
+const SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH = 200;
+
+function formatSessionStartAction(objective: string): string {
+  const normalizedObjective = objective.replace(/\s+/g, " ").trim();
+  const truncatedObjective = normalizedObjective.length > SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH
+    ? `${normalizedObjective.slice(0, SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH - 3)}...`
+    : normalizedObjective;
+  return `session started: ${truncatedObjective}`;
+}
 
 function getGitContext(projectRoot: string): {
   branch: string | null;
@@ -250,7 +261,7 @@ export function registerTeamCommands(program: Command): void {
         logger.start();
         logger.log({
           eventType: "session_start",
-          action: "session started",
+          action: formatSessionStartAction(objective),
           details: {
             objective,
             operator: s.operator,
@@ -262,8 +273,6 @@ export function registerTeamCommands(program: Command): void {
             git_dirty: s.gitDirty,
           },
         });
-        logger.stop();
-
         const tracer = getTracer();
         tracer.startActiveSpan(
           "session.start",
@@ -280,15 +289,38 @@ export function registerTeamCommands(program: Command): void {
         );
         recordSessionStart();
 
-        // Auto-prune old audit data (silent, best-effort).
-        const retentionDays = config.session.audit_retention_days;
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - retentionDays);
+        // Auto-prune old audit/session data (best-effort).
+        const auditCutoff = new Date();
+        auditCutoff.setDate(
+          auditCutoff.getDate() - config.session.audit_retention_days,
+        );
+        const sessionCutoff = new Date();
+        sessionCutoff.setDate(
+          sessionCutoff.getDate() - config.session.session_retention_days,
+        );
         try {
-          pruneAuditEvents(db, cutoff.toISOString());
+          const auditResult = pruneAuditEvents(db, auditCutoff.toISOString());
+          const sessionResult = pruneSessions(db, sessionCutoff.toISOString());
+          if (
+            auditResult.eventsDeleted > 0
+            || sessionResult.sessionsPruned > 0
+          ) {
+            logger.log({
+              eventType: "system",
+              action: `auto-prune: ${auditResult.eventsDeleted} events, ${sessionResult.sessionsPruned} sessions`,
+              details: {
+                audit_retention_days: config.session.audit_retention_days,
+                session_retention_days: config.session.session_retention_days,
+                events_deleted: auditResult.eventsDeleted,
+                sessions_pruned: sessionResult.sessionsPruned,
+              },
+              severity: "info",
+            });
+          }
         } catch {
           // Non-critical — don't block session start.
         }
+        logger.stop();
 
         return s;
       });
@@ -458,7 +490,7 @@ export function registerTeamCommands(program: Command): void {
         const sm = new StateManager(db, projectRoot);
 
         let prev: Session | null = null;
-        if (sessionId) {
+        if (sessionId && sessionId !== "latest") {
           prev = sm.getSession(sessionId);
         } else {
           const sessions = sm.listSessions({ limit: 1 });
@@ -512,6 +544,19 @@ export function registerTeamCommands(program: Command): void {
           },
         );
         recordSessionStart();
+
+        const teamKey = loadSigningKey(khoregoDir);
+        const logger = new AuditLogger(db, newSession.id, newSession.traceId, teamKey);
+        logger.start();
+        logger.log({
+          eventType: "session_start",
+          action: formatSessionStartAction(newSession.objective),
+          details: {
+            objective: newSession.objective,
+            resumed_from_session_id: prev.id,
+          },
+        });
+        logger.stop();
 
         return { prev, newSession };
       });

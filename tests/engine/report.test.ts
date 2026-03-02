@@ -60,7 +60,12 @@ describe("generateAuditReport", () => {
         startedAt: "2026-02-20T12:00:00.000Z",
         endedAt: "2026-02-20T12:10:05.000Z",
         parentSessionId: null,
-        configSnapshot: JSON.stringify({ boundaries }),
+        configSnapshot: JSON.stringify({
+          boundaries,
+          classifications: [
+            { level: "confidential", paths: ["src/**"] },
+          ],
+        }),
         contextSummary: null,
         metadata: null,
         operator: "davy",
@@ -93,6 +98,7 @@ describe("generateAuditReport", () => {
         eventType: "tool_use",
         action: "Updated source files",
         agentId: alpha.id,
+        details: { classification: "confidential" },
         filesAffected: ["z.ts", "a.ts"],
         severity: "warning",
       });
@@ -124,6 +130,8 @@ describe("generateAuditReport", () => {
       expect(report).toContain("Status: valid.");
       expect(report).toContain("Errors: none.");
       expect(report).toContain("sensitive_needs_review");
+      expect(report).toContain("## Data classification summary");
+      expect(report).toContain("| confidential | 1 | 2 |");
       expect(report).toContain("| info | 1 |");
       expect(report).toContain("| warning | 1 |");
       expect(report).toContain("| critical | 1 |");

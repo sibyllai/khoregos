@@ -7,6 +7,7 @@ import { Db } from "../../src/store/db.js";
 import {
   AuditLogger,
   pruneAuditEvents,
+  pruneSessions,
   setWebhookDispatcher,
 } from "../../src/engine/audit.js";
 import { setPluginManager, type PluginManager } from "../../src/engine/plugins.js";
@@ -16,6 +17,7 @@ import { generateSigningKey, loadSigningKey } from "../../src/engine/signing.js"
 import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
 import { sessionToDbRow } from "../../src/models/session.js";
 import type { Session } from "../../src/models/session.js";
 import { WebhookDispatcher } from "../../src/engine/webhooks.js";
@@ -137,6 +139,138 @@ describe("AuditLogger", () => {
         action: "resume test",
       });
       expect(event.sequence).toBe(countBefore + 1);
+    });
+
+    it("creates periodic timestamp anchors when interval_events is reached", async () => {
+      const sid = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+      const serverScript = [
+        "const http=require('node:http');",
+        "const port=18789;",
+        "const server=http.createServer((req,res)=>{",
+        "if(req.method!=='POST'){res.writeHead(404);res.end();return;}",
+        "const chunks=[];",
+        "req.on('data',c=>chunks.push(Buffer.from(c)));",
+        "req.on('end',()=>{const body=Buffer.concat(chunks);res.writeHead(200,{'Content-Type':'application/timestamp-reply'});res.end(body);});",
+        "});",
+        "server.listen(port,'127.0.0.1',()=>console.log('ready'));",
+      ].join("");
+      const server = spawn(process.execPath, ["-e", serverScript], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      await new Promise<void>((resolve, reject) => {
+        const onData = (chunk: Buffer) => {
+          if (chunk.toString("utf-8").includes("ready")) {
+            server.stdout.off("data", onData);
+            resolve();
+          }
+        };
+        server.stdout.on("data", onData);
+        server.once("error", reject);
+        server.once("exit", (code) => {
+          if (code !== null && code !== 0) {
+            reject(new Error(`mock tsa exited early with code ${code}`));
+          }
+        });
+      });
+      const configSnapshot = JSON.stringify({
+        project: { name: "test" },
+        observability: {
+          timestamping: {
+            enabled: true,
+            authority_url: "http://127.0.0.1:18789/tsr",
+            interval_events: 2,
+            strict_verify: false,
+          },
+        },
+      });
+      db.insert("sessions", sessionToDbRow({
+        id: sid,
+        objective: "auto timestamp",
+        state: "active",
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        parentSessionId: null,
+        configSnapshot,
+        contextSummary: null,
+        metadata: null,
+        operator: null,
+        hostname: null,
+        k6sVersion: null,
+        claudeCodeVersion: null,
+        gitBranch: null,
+        gitSha: null,
+        gitDirty: false,
+        traceId: null,
+      }));
+
+      try {
+        const logger = new AuditLogger(db, sid, null, signingKey!);
+        logger.start();
+        logger.log({ eventType: "session_start", action: "start" });
+        logger.log({ eventType: "tool_use", action: "run" });
+
+        let anchored = false;
+        for (let i = 0; i < 20; i += 1) {
+          const row = db.fetchOne(
+            "SELECT event_sequence FROM timestamps WHERE session_id = ? ORDER BY event_sequence DESC LIMIT 1",
+            [sid],
+          ) as { event_sequence?: number } | undefined;
+          if ((row?.event_sequence ?? 0) === 2) {
+            anchored = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        expect(anchored).toBe(true);
+      } finally {
+        server.kill();
+      }
+    });
+
+    it("does not auto-anchor before interval_events threshold", async () => {
+      const sid = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+      const configSnapshot = JSON.stringify({
+        project: { name: "test" },
+        observability: {
+          timestamping: {
+            enabled: true,
+            authority_url: "http://127.0.0.1:9/tsr",
+            interval_events: 3,
+            strict_verify: false,
+          },
+        },
+      });
+      db.insert("sessions", sessionToDbRow({
+        id: sid,
+        objective: "auto timestamp threshold",
+        state: "active",
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        parentSessionId: null,
+        configSnapshot,
+        contextSummary: null,
+        metadata: null,
+        operator: null,
+        hostname: null,
+        k6sVersion: null,
+        claudeCodeVersion: null,
+        gitBranch: null,
+        gitSha: null,
+        gitDirty: false,
+        traceId: null,
+      }));
+
+      const logger = new AuditLogger(db, sid, null, signingKey!);
+      logger.start();
+      logger.log({ eventType: "session_start", action: "start" });
+      logger.log({ eventType: "tool_use", action: "run" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const row = db.fetchOne(
+        "SELECT COUNT(*) as count FROM timestamps WHERE session_id = ?",
+        [sid],
+      ) as { count: number };
+      expect(row.count).toBe(0);
     });
 
     it("dispatches webhook side effects after persisting an audit event", () => {
@@ -273,5 +407,155 @@ describe("pruneAuditEvents", () => {
     const oldDate = "2019-06-01T00:00:00.000Z";
     const result = pruneAuditEvents(db, oldDate, false);
     expect(result.eventsDeleted).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("pruneSessions", () => {
+  let db: Db;
+  const staleSessionId = "01ARZ3NDEKTSV4RRFFQ69G5FAS";
+  const activeSessionId = "01ARZ3NDEKTSV4RRFFQ69G5FAT";
+
+  beforeAll(() => {
+    const dbPath = getTempDbPath();
+    db = new Db(dbPath);
+    db.connect();
+
+    db.insert("sessions", sessionToDbRow({
+      id: staleSessionId,
+      objective: "stale completed session",
+      state: "completed",
+      startedAt: "2020-01-01T00:00:00.000Z",
+      endedAt: "2020-01-02T00:00:00.000Z",
+      parentSessionId: null,
+      configSnapshot: null,
+      contextSummary: null,
+      metadata: null,
+      operator: null,
+      hostname: null,
+      k6sVersion: null,
+      claudeCodeVersion: null,
+      gitBranch: null,
+      gitSha: null,
+      gitDirty: false,
+      traceId: null,
+    }));
+    db.insert("sessions", sessionToDbRow({
+      id: activeSessionId,
+      objective: "active session",
+      state: "active",
+      startedAt: "2020-01-01T00:00:00.000Z",
+      endedAt: null,
+      parentSessionId: null,
+      configSnapshot: null,
+      contextSummary: null,
+      metadata: null,
+      operator: null,
+      hostname: null,
+      k6sVersion: null,
+      claudeCodeVersion: null,
+      gitBranch: null,
+      gitSha: null,
+      gitDirty: false,
+      traceId: null,
+    }));
+
+    db.insert("agents", {
+      id: "agent-stale",
+      session_id: staleSessionId,
+      name: "stale-agent",
+      role: "teammate",
+      state: "active",
+      spawned_at: "2020-01-01T00:00:00.000Z",
+    });
+    db.insert("audit_events", {
+      id: "audit-stale",
+      sequence: 1,
+      session_id: staleSessionId,
+      agent_id: null,
+      timestamp: "2020-01-01T00:00:00.000Z",
+      event_type: "session_start",
+      action: "stale start",
+      details: null,
+      files_affected: null,
+      gate_id: null,
+      hmac: null,
+      severity: "info",
+    });
+    db.insert("context_store", {
+      key: "resume_context",
+      session_id: staleSessionId,
+      agent_id: null,
+      value: "context",
+      updated_at: "2020-01-01T00:00:00.000Z",
+    });
+    db.insert("boundary_violations", {
+      id: "vio-stale",
+      session_id: staleSessionId,
+      agent_id: null,
+      timestamp: "2020-01-01T00:00:00.000Z",
+      file_path: "secret.txt",
+      violation_type: "forbidden_path",
+      enforcement_action: "logged",
+      details: null,
+    });
+    db.insert("file_locks", {
+      path: "lock.file",
+      session_id: staleSessionId,
+      agent_id: "agent-stale",
+      acquired_at: "2020-01-01T00:00:00.000Z",
+      expires_at: null,
+    });
+  });
+
+  afterAll(() => {
+    db.close();
+    cleanupTempDir();
+  });
+
+  it("dry run returns number of completed sessions that would be pruned", () => {
+    const result = pruneSessions(db, "2025-01-01T00:00:00.000Z", true);
+    expect(result.sessionsPruned).toBeGreaterThanOrEqual(1);
+    const staleStillExists = db.fetchOne(
+      "SELECT COUNT(*) as c FROM sessions WHERE id = ?",
+      [staleSessionId],
+    ) as { c: number };
+    expect(staleStillExists.c).toBe(1);
+  });
+
+  it("prunes completed sessions and cascade deletes associated records", () => {
+    const result = pruneSessions(db, "2025-01-01T00:00:00.000Z", false);
+    expect(result.sessionsPruned).toBeGreaterThanOrEqual(1);
+
+    const staleSession = db.fetchOne(
+      "SELECT COUNT(*) as c FROM sessions WHERE id = ?",
+      [staleSessionId],
+    ) as { c: number };
+    const staleAudit = db.fetchOne(
+      "SELECT COUNT(*) as c FROM audit_events WHERE session_id = ?",
+      [staleSessionId],
+    ) as { c: number };
+    const staleContext = db.fetchOne(
+      "SELECT COUNT(*) as c FROM context_store WHERE session_id = ?",
+      [staleSessionId],
+    ) as { c: number };
+    const staleAgents = db.fetchOne(
+      "SELECT COUNT(*) as c FROM agents WHERE session_id = ?",
+      [staleSessionId],
+    ) as { c: number };
+
+    expect(staleSession.c).toBe(0);
+    expect(staleAudit.c).toBe(0);
+    expect(staleContext.c).toBe(0);
+    expect(staleAgents.c).toBe(0);
+  });
+
+  it("does not prune active sessions regardless of age", () => {
+    const result = pruneSessions(db, "2025-01-01T00:00:00.000Z", false);
+    expect(result.sessionsPruned).toBe(0);
+    const activeStillExists = db.fetchOne(
+      "SELECT COUNT(*) as c FROM sessions WHERE id = ?",
+      [activeSessionId],
+    ) as { c: number };
+    expect(activeStillExists.c).toBe(1);
   });
 });

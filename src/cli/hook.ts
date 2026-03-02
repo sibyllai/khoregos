@@ -27,6 +27,7 @@ import {
   recordToolDurationSeconds,
 } from "../engine/telemetry.js";
 import { detectDependencyChanges } from "../engine/dependencies.js";
+import { ClassificationResolver } from "../engine/classification.js";
 import { ReviewPatternMatcher } from "../watcher/fs.js";
 import { Db } from "../store/db.js";
 import type { EventType } from "../models/audit.js";
@@ -445,6 +446,19 @@ export function registerHookCommands(program: Command): void {
           toolOutputStr.length > 2000
             ? toolOutputStr.slice(0, 2000) + "...[truncated]"
             : toolOutputStr;
+      }
+      if (config?.classifications?.length && filesAffected.length) {
+        const normalizedForMatching = filesAffected.map((filePath) => {
+          const relativePath = path.isAbsolute(filePath)
+            ? path.relative(projectRoot, filePath)
+            : filePath;
+          return relativePath.replaceAll("\\", "/");
+        });
+        const resolver = new ClassificationResolver(config.classifications);
+        const highest = resolver.highestLevel(normalizedForMatching);
+        if (highest !== "public") {
+          details.classification = highest;
+        }
       }
 
       const severity = classifySeverity({

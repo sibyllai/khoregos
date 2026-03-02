@@ -25,6 +25,8 @@ describe("audit report command", () => {
   let projectRoot: string;
   let originalCwd: string;
   let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.resetModules();
@@ -38,10 +40,16 @@ describe("audit report command", () => {
     writeFileSync(path.join(projectRoot, ".khoregos", "k6s.db"), "");
     process.chdir(projectRoot);
     logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new Error(`process.exit:${code ?? 0}`);
+    });
   });
 
   afterEach(() => {
     logSpy.mockRestore();
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
     process.chdir(originalCwd);
     rmSync(projectRoot, { recursive: true, force: true });
   });
@@ -55,7 +63,7 @@ describe("audit report command", () => {
 
     expect(withDbMock).toHaveBeenCalledTimes(1);
     expect(resolveSessionIdMock).toHaveBeenCalledTimes(1);
-    expect(generateAuditReportMock).toHaveBeenCalledWith({}, "session-123", process.cwd());
+    expect(generateAuditReportMock).toHaveBeenCalledWith({}, "session-123", process.cwd(), "generic");
     expect(logSpy).toHaveBeenCalledWith("# Khoregos audit report\n");
   });
 
@@ -73,5 +81,19 @@ describe("audit report command", () => {
     const fileContents = readFileSync(outputPath, "utf-8");
     expect(fileContents).toBe("# Khoregos audit report\n");
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Wrote audit report to"));
+  });
+
+  it("prints a friendly error for invalid report standard", async () => {
+    const { registerAuditCommands } = await import("../../src/cli/audit.js");
+    const program = new Command();
+    registerAuditCommands(program);
+
+    await expect(
+      program.parseAsync(["audit", "report", "--standard", "badvalue"], { from: "user" }),
+    ).rejects.toThrow("process.exit:1");
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Error: standard must be one of: generic, soc2, iso27001."),
+    );
   });
 });

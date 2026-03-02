@@ -9,9 +9,14 @@ import chalk from "chalk";
 import Table from "cli-table3";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
-import { AuditLogger, pruneAuditEvents } from "../engine/audit.js";
+import { AuditLogger, pruneAuditEvents, pruneSessions } from "../engine/audit.js";
 import { loadSigningKey, verifyChain } from "../engine/signing.js";
-import { generateAuditReport } from "../engine/report.js";
+import { generateAuditReport, type ReportStandard } from "../engine/report.js";
+import { displayEventType } from "../engine/event-types.js";
+import {
+  createAndStoreTimestampAnchorFromHmac,
+  type TimestampAnchor,
+} from "../engine/timestamp.js";
 import { loadConfigOrDefault } from "../models/config.js";
 import type {
   AuditEvent,
@@ -42,15 +47,6 @@ function parseDuration(duration: string): string {
   return new Date(now - ms).toISOString();
 }
 
-/** Map internal event types to user-facing display names. */
-const EVENT_TYPE_DISPLAY: Record<string, string> = {
-  gate_triggered: "sensitive_needs_review",
-};
-
-function displayEventType(eventType: string): string {
-  return EVENT_TYPE_DISPLAY[eventType] ?? eventType;
-}
-
 /** Format a millisecond delta as a human-readable short string. */
 function formatDeltaMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -79,8 +75,126 @@ function printEvent(event: AuditEvent): void {
   );
 }
 
+function parseReportStandard(value: string): ReportStandard {
+  if (value === "generic" || value === "soc2" || value === "iso27001") {
+    return value;
+  }
+  throw new Error("standard must be one of: generic, soc2, iso27001");
+}
+
 export function registerAuditCommands(program: Command): void {
   const audit = program.command("audit").description("View audit trail");
+
+  audit
+    .command("timestamp")
+    .description("Create an external timestamp anchor for a session")
+    .option("-s, --session <id>", "Session ID or 'latest'", "latest")
+    .action(async (opts: { session: string }) => {
+      try {
+        const projectRoot = process.cwd();
+        const khoregoDir = path.join(projectRoot, ".khoregos");
+        if (!existsSync(path.join(khoregoDir, "k6s.db"))) {
+          console.log(chalk.yellow("No audit data found."));
+          return;
+        }
+
+        const config = loadConfigOrDefault(path.join(projectRoot, "k6s.yaml"), "project");
+        const timestampingConfig = config.observability?.timestamping;
+        const tsaUrl = timestampingConfig?.authority_url ?? "https://freetsa.org/tsr";
+        const strictVerify = timestampingConfig?.strict_verify === true;
+
+        const db = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
+        db.connect();
+        let anchor: TimestampAnchor | null = null;
+        try {
+          const sm = new StateManager(db, projectRoot);
+          const sessionId = resolveSessionId(sm, opts.session);
+          if (!sessionId) {
+            console.log(chalk.yellow("No session found."));
+            return;
+          }
+
+          const latest = db.fetchOne(
+            "SELECT sequence, hmac FROM audit_events WHERE session_id = ? ORDER BY sequence DESC LIMIT 1",
+            [sessionId],
+          );
+          const sequence = Number(latest?.sequence ?? 0);
+          const hmac = typeof latest?.hmac === "string" ? latest.hmac : null;
+          if (!hmac || sequence <= 0) {
+            console.log(chalk.yellow("No signed audit events available for timestamping."));
+            return;
+          }
+
+          const caCertFile = timestampingConfig?.ca_cert_file
+            ? (
+              path.isAbsolute(timestampingConfig.ca_cert_file)
+                ? timestampingConfig.ca_cert_file
+                : path.join(projectRoot, timestampingConfig.ca_cert_file)
+            )
+            : undefined;
+          const tsaCertFile = timestampingConfig?.tsa_cert_file
+            ? (
+              path.isAbsolute(timestampingConfig.tsa_cert_file)
+                ? timestampingConfig.tsa_cert_file
+                : path.join(projectRoot, timestampingConfig.tsa_cert_file)
+            )
+            : undefined;
+
+          anchor = await createAndStoreTimestampAnchorFromHmac({
+            db,
+            sessionId,
+            eventSequence: sequence,
+            eventHmac: hmac,
+            timestamping: {
+              authorityUrl: tsaUrl,
+              strictVerify,
+              caCertFile,
+              tsaCertFile,
+            },
+            projectRoot,
+          });
+
+          const key = loadSigningKey(khoregoDir);
+          const session = sm.getSession(sessionId);
+          const logger = new AuditLogger(db, sessionId, session?.traceId, key);
+          logger.start();
+          let host = tsaUrl;
+          try {
+            host = new URL(tsaUrl).host;
+          } catch {
+            host = tsaUrl;
+          }
+          logger.log({
+            eventType: "system",
+            action: `timestamp anchor: seq ${sequence}, tsa=${host}`,
+            details: {
+              anchor_id: anchor.id,
+              chain_hash: anchor.chainHash,
+              event_sequence: sequence,
+              tsa_url: tsaUrl,
+              verified: anchor.verified,
+              strict_verified: strictVerify,
+            },
+            severity: "info",
+          });
+          logger.stop();
+        } finally {
+          db.close();
+        }
+
+        if (!anchor) {
+          return;
+        }
+        console.log(
+          chalk.green("✓")
+          + ` Timestamp anchor created at seq ${anchor.eventSequence} (${anchor.verified ? "verified" : "unverified"})`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "timestamp anchor failed";
+        console.error(chalk.red(`Error: ${message}.`));
+        process.exit(1);
+      }
+    });
 
   audit
     .command("show")
@@ -323,24 +437,50 @@ export function registerAuditCommands(program: Command): void {
       "--before <date>",
       "Delete events before this ISO date (overrides retention config)",
     )
+    .option(
+      "--sessions-before <date>",
+      "Delete completed sessions with ended_at before this ISO date",
+    )
     .option("--dry-run", "Show what would be deleted without deleting")
-    .action((opts: { before?: string; dryRun?: boolean }) => {
+    .action((opts: { before?: string; sessionsBefore?: string; dryRun?: boolean }) => {
       const projectRoot = process.cwd();
       const configFile = path.join(projectRoot, "k6s.yaml");
+      const config = loadConfigOrDefault(configFile, "project");
 
-      let beforeDate: string;
-      if (opts.before) {
-        beforeDate = new Date(opts.before).toISOString();
+      const shouldPruneEvents = opts.before !== undefined || opts.sessionsBefore === undefined;
+      const shouldPruneSessions = opts.sessionsBefore !== undefined || opts.before === undefined;
+
+      let eventsBeforeDate: string;
+      if (opts.before !== undefined) {
+        eventsBeforeDate = new Date(opts.before).toISOString();
       } else {
-        const config = loadConfigOrDefault(configFile, "project");
         const retentionDays = config.session.audit_retention_days;
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - retentionDays);
-        beforeDate = cutoff.toISOString();
+        eventsBeforeDate = cutoff.toISOString();
+      }
+
+      let sessionsBeforeDate: string;
+      if (opts.sessionsBefore !== undefined) {
+        sessionsBeforeDate = new Date(opts.sessionsBefore).toISOString();
+      } else {
+        const retentionDays = config.session.session_retention_days;
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - retentionDays);
+        sessionsBeforeDate = cutoff.toISOString();
       }
 
       const result = withDb(projectRoot, (db) => {
-        return pruneAuditEvents(db, beforeDate, opts.dryRun ?? false);
+        const eventsResult = shouldPruneEvents
+          ? pruneAuditEvents(db, eventsBeforeDate, opts.dryRun ?? false)
+          : { eventsDeleted: 0, sessionsPruned: 0 };
+        const sessionsResult = shouldPruneSessions
+          ? pruneSessions(db, sessionsBeforeDate, opts.dryRun ?? false)
+          : { sessionsPruned: 0 };
+        return {
+          eventsDeleted: eventsResult.eventsDeleted,
+          sessionsPruned: sessionsResult.sessionsPruned,
+        };
       });
 
       if (opts.dryRun) {
@@ -448,19 +588,32 @@ export function registerAuditCommands(program: Command): void {
     .command("report")
     .description("Generate a structured audit report for a session")
     .option("-s, --session <id>", "Session ID or 'latest'", "latest")
+    .option(
+      "--standard <name>",
+      "Report standard: generic, soc2, iso27001",
+      "generic",
+    )
     .option("-o, --output <file>", "Write report to file (stdout if omitted)")
-    .action((opts: { session: string; output?: string }) => {
+    .action((opts: { session: string; standard: string; output?: string }) => {
       const projectRoot = process.cwd();
       if (!existsSync(path.join(projectRoot, ".khoregos", "k6s.db"))) {
         console.log(chalk.yellow("No audit data found."));
         return;
       }
 
+      let standard: ReportStandard;
+      try {
+        standard = parseReportStandard(opts.standard);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "invalid report standard";
+        console.error(chalk.red(`Error: ${message}.`));
+        process.exit(1);
+      }
       const report = withDb(projectRoot, (db) => {
         const sm = new StateManager(db, projectRoot);
         const sessionId = resolveSessionId(sm, opts.session);
         if (!sessionId) return null;
-        return generateAuditReport(db, sessionId, projectRoot);
+        return generateAuditReport(db, sessionId, projectRoot, standard);
       });
 
       if (!report) {

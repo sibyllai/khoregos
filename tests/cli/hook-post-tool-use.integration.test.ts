@@ -14,6 +14,7 @@ const recordViolationMock = vi.fn();
 const revertFileMock = vi.fn(() => "SECRET=violating\n");
 let currentBoundaryEnforcement: "advisory" | "strict" = "strict";
 const loadConfigOrDefaultMock = vi.fn(() => ({
+  classifications: [],
   boundaries: [
     {
       pattern: "primary",
@@ -244,5 +245,51 @@ describe("hook post-tool-use strict enforcement", () => {
       return payload?.eventType === "boundary_violation";
     });
     expect(hasBoundaryViolationAudit).toBe(false);
+  });
+
+  it("adds non-public classification to tool_use details when configured", async () => {
+    currentBoundaryEnforcement = "advisory";
+    loadConfigOrDefaultMock.mockImplementation(() => ({
+      classifications: [
+        {
+          level: "confidential",
+          paths: ["src/backend/auth/**"],
+        },
+      ],
+      boundaries: [
+        {
+          pattern: "primary",
+          allowed_paths: ["src/**"],
+          forbidden_paths: [".env*"],
+          enforcement: "advisory",
+        },
+      ],
+      gates: [],
+      observability: { webhooks: [] },
+    }));
+    const hookPayload = JSON.stringify({
+      tool_name: "Write",
+      tool_input: { path: "src/backend/auth/login.ts" },
+      session_id: "claude-session-3",
+      tool_use_id: "tool-use-3",
+      tool_response: "ok",
+    });
+    readHookPayloadChunks.push(Buffer.from(hookPayload, "utf-8"));
+
+    const { registerHookCommands } = await import("../../src/cli/hook.js");
+    const program = new Command();
+    registerHookCommands(program);
+
+    await program.parseAsync(["hook", "post-tool-use"], { from: "user" });
+
+    const toolUseCall = auditLogMock.mock.calls.find((call) => {
+      const [payload] = call as [{ eventType?: string }];
+      return payload?.eventType === "tool_use";
+    });
+    expect(toolUseCall).toBeDefined();
+    const [toolUsePayload] = toolUseCall as [{
+      details?: { classification?: string };
+    }];
+    expect(toolUsePayload.details?.classification).toBe("confidential");
   });
 });

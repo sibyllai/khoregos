@@ -26,10 +26,13 @@ Khoregos is built for this gap: structured, signed, queryable evidence for what 
 - **Boundary controls.** Allowed/forbidden path rules with advisory and strict enforcement (automatic revert via git).
 - **Collaboration safety.** File lock primitives to reduce multi-agent edit collisions.
 - **Sensitive change annotations.** Gate-style markers for files that need human review.
-- **Audit reporting.** Structured Markdown reports with session summary, event timeline, chain integrity verification, and boundary violations.
+- **Audit reporting.** Structured Markdown reports with session summary, event timeline, chain integrity verification, and boundary violations. SOC 2 and ISO 27001 compliance mapping templates.
 - **Supply chain visibility.** Automatic detection of dependency additions, removals, and updates in `package.json`.
 - **Webhook notifications.** HMAC-signed HTTP webhooks with retry backoff for downstream integrations.
 - **Resource limits.** Per-agent tool call limits with advisory enforcement and MCP warnings.
+- **Data classification.** File-level classification tags (`public`, `internal`, `confidential`, `restricted`) with audit event tagging and report summaries.
+- **External timestamping.** RFC 3161 timestamp anchors for audit chain non-repudiation, with optional strict OpenSSL verification.
+- **Compliance checkpoints.** Point-in-time attestation of audit chain integrity, boundary compliance, and gate status.
 - **Plugin extensibility.** ESM plugin system with lifecycle and event hooks for custom governance logic.
 - **Observability.** OpenTelemetry support and Prometheus metrics endpoint.
 - **MCP integration.** Native governance tools exposed through MCP, with automatic project wiring.
@@ -118,11 +121,11 @@ k6s team resume
 ## What you can configure in k6s.yaml
 
 - **Project metadata.** Project identity and session defaults.
-- **Session retention.** Context and audit retention windows.
+- **Session retention.** Context, audit, and session retention windows with automated enforcement.
 - **Boundaries.** Per-agent allowed and forbidden path patterns with enforcement mode.
+- **Data classifications.** File-level classification levels for compliance tagging.
 - **Gates and sensitive patterns.** File pattern triggers that generate review-oriented audit annotations.
-- **Observability.** OpenTelemetry endpoint settings and Prometheus endpoint settings.
-- **Webhooks.** Event-driven outbound notifications for governance workflows.
+- **Observability.** OpenTelemetry, Prometheus, external timestamping, and webhook settings.
 
 ## Why this matters for legal and compliance teams
 
@@ -136,8 +139,7 @@ Khoregos is designed to make AI development reviewable and defensible.
 
 Upcoming and next-phase priorities:
 
-- **Phase 4.** Complete.
-- **Phase 5.** Compliance-ready reporting workflows, standards-oriented report generation, and checkpoint tooling.
+- **Phase 5.** Complete.
 - **Phase 6.** Enterprise platform capabilities such as RBAC, SSO, and PostgreSQL-backed deployment models.
 
 Near-term roadmap items include dashboard maturity and continued observability hardening.

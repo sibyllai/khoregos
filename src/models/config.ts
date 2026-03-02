@@ -14,6 +14,7 @@ export const ProjectConfigSchema = z.object({
 export const SessionConfigSchema = z.object({
   context_retention_days: z.number().default(90),
   audit_retention_days: z.number().default(365),
+  session_retention_days: z.number().default(365),
   // When true (default), ending a Claude Code session automatically
   // completes the k6s session and removes the daemon state file.
   // Set to false to keep the k6s session alive across multiple
@@ -47,6 +48,20 @@ export const GateConfigSchema = z.object({
   notify: z.array(z.string()).default(["terminal"]),
 });
 
+export const ClassificationLevel = z.enum([
+  "public",
+  "internal",
+  "confidential",
+  "restricted",
+]);
+export type ClassificationLevel = z.infer<typeof ClassificationLevel>;
+
+export const ClassificationConfigSchema = z.object({
+  level: ClassificationLevel,
+  paths: z.array(z.string()),
+});
+export type ClassificationConfig = z.infer<typeof ClassificationConfigSchema>;
+
 export const PrometheusConfigSchema = z.object({
   enabled: z.boolean().default(false),
   port: z.number().default(9090),
@@ -55,6 +70,15 @@ export const PrometheusConfigSchema = z.object({
 export const OpenTelemetryConfigSchema = z.object({
   enabled: z.boolean().default(false),
   endpoint: z.string().default("http://localhost:4317"),
+});
+
+export const TimestampingConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  authority_url: z.string().default("https://freetsa.org/tsr"),
+  interval_events: z.number().default(0),
+  strict_verify: z.boolean().default(false),
+  ca_cert_file: z.string().optional(),
+  tsa_cert_file: z.string().optional(),
 });
 
 export const WebhookConfigSchema = z.object({
@@ -68,6 +92,7 @@ export const WebhookConfigSchema = z.object({
 export const ObservabilityConfigSchema = z.object({
   prometheus: PrometheusConfigSchema.default({}),
   opentelemetry: OpenTelemetryConfigSchema.default({}),
+  timestamping: TimestampingConfigSchema.optional(),
   webhooks: z.array(WebhookConfigSchema).default([]),
 });
 
@@ -81,6 +106,7 @@ export const K6sConfigSchema = z.object({
   version: z.string().default("1"),
   project: ProjectConfigSchema,
   session: SessionConfigSchema.default({}),
+  classifications: z.array(ClassificationConfigSchema).default([]),
   boundaries: z.array(BoundaryConfigSchema).default([]),
   gates: z.array(GateConfigSchema).default([]),
   observability: ObservabilityConfigSchema.default({}),

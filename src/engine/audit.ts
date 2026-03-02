@@ -6,6 +6,7 @@
  */
 
 import { ulid } from "ulid";
+import path from "node:path";
 import type { Db } from "../store/db.js";
 import {
   type AuditEvent,
@@ -18,6 +19,7 @@ import { computeHmac, genesisValue } from "./signing.js";
 import { recordAuditEvent } from "./telemetry.js";
 import type { WebhookDispatcher } from "./webhooks.js";
 import { getPluginManager } from "./plugins.js";
+import { createAndStoreTimestampAnchorFromHmacSync } from "./timestamp.js";
 
 let globalWebhookDispatcher: WebhookDispatcher | null = null;
 
@@ -28,6 +30,16 @@ export function setWebhookDispatcher(dispatcher: WebhookDispatcher | null): void
 export class AuditLogger {
   private sequence = 0;
   private lastHmac: string | null = null;
+  private autoTimestamping:
+    | {
+      intervalEvents: number;
+      authorityUrl: string;
+      strictVerify: boolean;
+      caCertFile?: string;
+      tsaCertFile?: string;
+      projectRoot: string;
+    }
+    | null = null;
 
   constructor(
     private db: Db,
@@ -50,6 +62,49 @@ export class AuditLogger {
         [this.sessionId, this.sequence],
       );
       this.lastHmac = (lastRow?.hmac as string) ?? null;
+    }
+
+    const sessionRow = this.db.fetchOne(
+      "SELECT config_snapshot FROM sessions WHERE id = ?",
+      [this.sessionId],
+    );
+    const snapshot = typeof sessionRow?.config_snapshot === "string"
+      ? sessionRow.config_snapshot
+      : null;
+    if (!snapshot) {
+      this.autoTimestamping = null;
+      return;
+    }
+    try {
+      const parsed = JSON.parse(snapshot) as {
+        observability?: {
+          timestamping?: {
+            enabled?: boolean;
+            authority_url?: string;
+            interval_events?: number;
+            strict_verify?: boolean;
+            ca_cert_file?: string;
+            tsa_cert_file?: string;
+          };
+        };
+      };
+      const ts = parsed.observability?.timestamping;
+      const intervalEvents = Number(ts?.interval_events ?? 0);
+      const isEnabled = ts?.enabled === true;
+      if (!isEnabled || !Number.isFinite(intervalEvents) || intervalEvents <= 0) {
+        this.autoTimestamping = null;
+        return;
+      }
+      this.autoTimestamping = {
+        intervalEvents: Math.floor(intervalEvents),
+        authorityUrl: ts?.authority_url || "https://freetsa.org/tsr",
+        strictVerify: ts?.strict_verify === true,
+        caCertFile: ts?.ca_cert_file,
+        tsaCertFile: ts?.tsa_cert_file,
+        projectRoot: path.dirname(path.dirname(this.db.path)),
+      };
+    } catch {
+      this.autoTimestamping = null;
     }
   }
 
@@ -98,6 +153,38 @@ export class AuditLogger {
     }
 
     this.db.insert("audit_events", auditEventToDbRow(event));
+
+    if (
+      this.autoTimestamping
+      && event.hmac
+      && event.sequence % this.autoTimestamping.intervalEvents === 0
+    ) {
+      const cfg = this.autoTimestamping;
+      const caCertFile = cfg.caCertFile
+        ? (path.isAbsolute(cfg.caCertFile) ? cfg.caCertFile : path.join(cfg.projectRoot, cfg.caCertFile))
+        : undefined;
+      const tsaCertFile = cfg.tsaCertFile
+        ? (path.isAbsolute(cfg.tsaCertFile) ? cfg.tsaCertFile : path.join(cfg.projectRoot, cfg.tsaCertFile))
+        : undefined;
+      try {
+        createAndStoreTimestampAnchorFromHmacSync({
+          db: this.db,
+          sessionId: this.sessionId,
+          eventSequence: event.sequence,
+          eventHmac: event.hmac,
+          timestamping: {
+            authorityUrl: cfg.authorityUrl,
+            strictVerify: cfg.strictVerify,
+            caCertFile,
+            tsaCertFile,
+          },
+          projectRoot: cfg.projectRoot,
+        });
+      } catch {
+        // Automatic periodic anchoring is best-effort.
+      }
+    }
+
     recordAuditEvent(event.eventType, event.severity);
     if (globalWebhookDispatcher) {
       globalWebhookDispatcher.dispatch(event, {
@@ -180,43 +267,48 @@ export function pruneAuditEvents(
       "SELECT COUNT(*) as count FROM audit_events WHERE timestamp < ?",
       [beforeDate],
     );
-    // Sessions that ended before the cutoff with no remaining events.
-    const sessionCount = db.fetchOne(
-      `SELECT COUNT(*) as count FROM sessions
-       WHERE state IN ('completed', 'failed')
-       AND ended_at IS NOT NULL AND ended_at < ?`,
-      [beforeDate],
-    );
     return {
       eventsDeleted: (eventCount?.count as number) ?? 0,
-      sessionsPruned: (sessionCount?.count as number) ?? 0,
+      sessionsPruned: 0,
     };
   }
 
-  // Delete old events.
+  // Delete old events only. Session pruning is handled by pruneSessions.
   const eventResult = db.db
     .prepare("DELETE FROM audit_events WHERE timestamp < ?")
     .run(beforeDate);
 
-  // Find completed/failed sessions that ended before the cutoff.
+  return { eventsDeleted: eventResult.changes, sessionsPruned: 0 };
+}
+
+/**
+ * Prune completed/failed sessions older than the provided cutoff date.
+ * Active or created sessions are never pruned.
+ */
+export function pruneSessions(
+  db: Db,
+  beforeDate: string,
+  dryRun = false,
+): { sessionsPruned: number } {
   const staleSessions = db.fetchAll(
     `SELECT id FROM sessions
      WHERE state IN ('completed', 'failed')
      AND ended_at IS NOT NULL AND ended_at < ?`,
     [beforeDate],
   );
+  if (dryRun) {
+    return { sessionsPruned: staleSessions.length };
+  }
 
-  let sessionsPruned = 0;
-  for (const row of staleSessions) {
-    const sid = row.id as string;
-    // Only prune if no audit events remain for this session.
-    const remaining = db.fetchOne(
-      "SELECT COUNT(*) as count FROM audit_events WHERE session_id = ?",
-      [sid],
-    );
-    if (((remaining?.count as number) ?? 0) === 0) {
-      // Cascade-delete related records.
+  const staleSessionIds = staleSessions.map((row) => row.id as string);
+  if (staleSessionIds.length === 0) {
+    return { sessionsPruned: 0 };
+  }
+
+  db.transaction(() => {
+    for (const sid of staleSessionIds) {
       for (const table of [
+        "audit_events",
         "boundary_violations",
         "file_locks",
         "context_store",
@@ -227,9 +319,8 @@ export function pruneAuditEvents(
         db.delete(table, "session_id = ?", [sid]);
       }
       db.delete("sessions", "id = ?", [sid]);
-      sessionsPruned++;
     }
-  }
+  });
 
-  return { eventsDeleted: eventResult.changes, sessionsPruned };
+  return { sessionsPruned: staleSessionIds.length };
 }

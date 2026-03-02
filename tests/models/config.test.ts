@@ -36,6 +36,19 @@ project:
   description: Test project
 session:
   audit_retention_days: 90
+  session_retention_days: 45
+classifications:
+  - level: confidential
+    paths:
+      - src/**
+observability:
+  timestamping:
+    enabled: true
+    authority_url: https://tsa.example.test/tsr
+    interval_events: 100
+    strict_verify: true
+    ca_cert_file: certs/ca.pem
+    tsa_cert_file: certs/tsa.pem
 boundaries:
   - pattern: "*"
     forbidden_paths: [".env*"]
@@ -46,6 +59,13 @@ boundaries:
       const config = loadConfig(configPath);
       expect(config.project.name).toBe("my-project");
       expect(config.session.audit_retention_days).toBe(90);
+      expect(config.session.session_retention_days).toBe(45);
+      expect(config.classifications).toHaveLength(1);
+      expect(config.classifications[0].level).toBe("confidential");
+      expect(config.observability?.timestamping?.enabled).toBe(true);
+      expect(config.observability?.timestamping?.authority_url).toBe("https://tsa.example.test/tsr");
+      expect(config.observability?.timestamping?.strict_verify).toBe(true);
+      expect(config.observability?.timestamping?.ca_cert_file).toBe("certs/ca.pem");
       expect(config.boundaries).toHaveLength(1);
       expect(config.boundaries![0].pattern).toBe("*");
     });
@@ -83,6 +103,9 @@ boundaries:
       );
       expect(config.project.name).toBe("default-name");
       expect(config.boundaries).toBeDefined();
+      expect(config.session.session_retention_days).toBe(365);
+      expect(config.classifications).toEqual([]);
+      expect(config.observability.timestamping).toBeUndefined();
     });
 
     it("returns loaded config when file exists", () => {

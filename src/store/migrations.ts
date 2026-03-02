@@ -2,7 +2,7 @@
  * Database schema migrations for Khoregos.
  */
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 type Migration = [version: number, sql: string];
 
@@ -154,6 +154,23 @@ const MIGRATIONS: Migration[] = [
     `
     -- Agent tool call tracking for resource limits.
     ALTER TABLE agents ADD COLUMN tool_call_count INTEGER DEFAULT 0;
+    `,
+  ],
+  [
+    5,
+    `
+    -- External timestamp anchors.
+    CREATE TABLE IF NOT EXISTS timestamps (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      created_at TEXT NOT NULL,
+      chain_hash TEXT NOT NULL,
+      event_sequence INTEGER NOT NULL,
+      tsa_response TEXT NOT NULL,
+      tsa_url TEXT NOT NULL,
+      verified INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_timestamps_session ON timestamps(session_id, event_sequence);
     `,
   ],
 ];

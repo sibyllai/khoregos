@@ -25,6 +25,7 @@ function config(overrides: Partial<K6sConfig["observability"]> = {}): K6sConfig 
     version: "1",
     project: { name: "test" },
     session: {},
+    classifications: [],
     boundaries: [],
     gates: [],
     observability: {

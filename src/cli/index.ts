@@ -31,6 +31,7 @@ import { registerTeamCommands } from "./team.js";
 import { registerSessionCommands } from "./session.js";
 import { registerAuditCommands } from "./audit.js";
 import { registerHookCommands } from "./hook.js";
+import { registerComplianceCommands } from "./compliance.js";
 import { VERSION } from "../version.js";
 
 const program = new Command();
@@ -45,6 +46,7 @@ registerTeamCommands(program);
 registerSessionCommands(program);
 registerAuditCommands(program);
 registerHookCommands(program);
+registerComplianceCommands(program);
 
 // init
 program

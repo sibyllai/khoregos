@@ -50,6 +50,10 @@ const TABLE_SCHEMA: Record<string, ReadonlySet<string>> = {
     "id", "session_id", "agent_id", "timestamp", "file_path",
     "violation_type", "enforcement_action", "details",
   ]),
+  timestamps: new Set([
+    "id", "session_id", "created_at", "chain_hash", "event_sequence",
+    "tsa_response", "tsa_url", "verified",
+  ]),
   schema_migrations: new Set(["version", "applied_at"]),
 };
 
