@@ -29,7 +29,15 @@ Khoregos closes this gap.
 
 ## Quick start
 
+**Install the CLI:**
+
+```bash
+npm install -g khoregos
+```
+
 **Install the Claude Code plugin (recommended):**
+
+The plugin automates hook and MCP server registration, adds a governance skill, and provides slash commands. The CLI above must be on your PATH — the plugin calls it under the hood.
 
 Inside a Claude Code session:
 
@@ -38,15 +46,7 @@ Inside a Claude Code session:
 /plugin install khoregos@sibyllai
 ```
 
-This registers hooks, MCP server, governance skill, and slash commands automatically.
-
-**Or install the CLI manually:**
-
-```bash
-git clone https://github.com/sibyllai/khoregos.git
-cd khoregos/khoregos
-npm install && npm run build && npm link
-```
+Without the plugin, `k6s team start` falls back to direct registration in `.claude/settings.json`.
 
 **Initialize in your project:**
 
