@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
-import YAML, { Document, isSeq } from 'yaml';
+import YAML, { Document, isNode, isSeq } from 'yaml';
 import { isPluginInstalled } from '../daemon/manager.js';
 import { generateSigningKey } from '../engine/signing.js';
 import { generateDefaultConfig } from '../models/config.js';
@@ -69,7 +69,7 @@ function addInlineComments(doc: Document, presetName: string): void {
     ['observability', 'timestamping', 'strict_verify'],
     true,
   );
-  if (strictVerify) {
+  if (isNode(strictVerify)) {
     strictVerify.commentBefore =
       ' Set to true once the TSA certificate is installed (requires openssl on PATH).';
   }

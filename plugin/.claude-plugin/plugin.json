@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "author": {
     "name": "Sibyllai",
-    "url": "https://github.com/sibyllai/khoregos"
+    "url": "https://github.com/sibyllai"
   },
   "homepage": "https://github.com/sibyllai/khoregos",
   "keywords": [
@@ -15,5 +15,11 @@
     "agent-teams",
     "enterprise"
   ],
+  "components": {
+    "hooks": ["hooks/hooks.json"],
+    "skills": ["skills/governance/SKILL.md"],
+    "commands": ["commands/"],
+    "mcpServers": [".mcp.json"]
+  },
   "license": "MIT"
 }

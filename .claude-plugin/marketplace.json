@@ -1,5 +1,4 @@
 {
-  "name": "sibyllai",
   "owner": {
     "name": "Sibyllai",
     "url": "https://github.com/sibyllai"
@@ -7,9 +6,11 @@
   "plugins": [
     {
       "name": "khoregos",
-      "source": "./plugin",
+      "source": "plugin",
       "version": "1.0.0",
       "description": "Enterprise governance for Claude Code Agent Teams. Audit trails, boundaries, compliance.",
+      "license": "MIT",
+      "homepage": "https://github.com/sibyllai/khoregos",
       "category": "governance",
       "keywords": [
         "governance",

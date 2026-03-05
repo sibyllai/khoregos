@@ -6,10 +6,17 @@
   "bin": {
     "k6s": "bin/k6s.js"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "plugin/",
+    ".claude-plugin/"
+  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
+    "prepublishOnly": "npm run build",
     "build": "tsc",
     "dev": "tsx src/cli/index.ts",
     "test": "vitest",
