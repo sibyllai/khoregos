@@ -29,7 +29,15 @@ Khoregos closes this gap.
 
 ## Quick start
 
+**Install the CLI:**
+
+```bash
+npm install -g khoregos
+```
+
 **Install the Claude Code plugin (recommended):**
+
+The plugin automates hook and MCP server registration, adds a governance skill, and provides slash commands. The CLI above must be on your PATH — the plugin calls it under the hood.
 
 Inside a Claude Code session:
 
@@ -38,21 +46,15 @@ Inside a Claude Code session:
 /plugin install khoregos@sibyllai
 ```
 
-This registers hooks, MCP server, governance skill, and slash commands automatically.
-
-**Or install the CLI manually:**
-
-```bash
-git clone https://github.com/sibyllai/khoregos.git
-cd khoregos/khoregos
-npm install && npm run build && npm link
-```
+Without the plugin, `k6s team start` falls back to direct registration in `.claude/settings.json`.
 
 **Initialize in your project:**
 
 ```bash
 cd /path/to/your-project
-k6s init
+k6s init                              # Default config
+k6s init --preset security-strict     # Or pick a preset
+k6s init --list-presets               # See all six presets
 ```
 
 **Start a governed workspace:**
@@ -146,6 +148,7 @@ The `sensitive_needs_review` warning on seq 8 fired automatically because the ag
 - **Webhook notifications.** HMAC-signed HTTP callbacks with retry backoff.
 - **Resource limits.** Per-agent tool call caps with advisory enforcement.
 - **Claude Code plugin.** Native plugin with hooks, MCP server, governance skill, and slash commands. Two-command install via marketplace.
+- **Configuration presets.** Six named presets (`minimal`, `security-strict`, `compliance-soc2`, `compliance-iso27001`, `monorepo`, `microservices`) generate a tailored `k6s.yaml` in one command.
 - **Plugin system.** ESM plugins with lifecycle and event hooks for custom governance logic.
 - **Observability.** OpenTelemetry traces, Prometheus metrics endpoint, OTLP export.
 - **File locking.** SQLite-based exclusive locks to prevent multi-agent edit collisions.
@@ -193,11 +196,11 @@ When the plugin is not installed, `k6s team start` falls back to direct filesyst
 
 ## Configuration
 
-`k6s.yaml` controls everything: project metadata, retention policies, per-agent boundary rules, data classifications, gate patterns, and observability settings. `k6s init` generates sensible defaults that flag `.env*`, `*.pem`, `*.key`, and dependency files out of the box.
+`k6s.yaml` controls everything: project metadata, retention policies, per-agent boundary rules, data classifications, gate patterns, and observability settings. `k6s init` generates sensible defaults that flag `.env*`, `*.pem`, `*.key`, and dependency files out of the box. For faster setup, use `k6s init --preset <name>` to generate a config tuned for your use case — from solo experiments (`minimal`) to SOC 2 audit prep (`compliance-soc2`) to multi-package repos (`monorepo`).
 
 ## Roadmap
 
-- **Phase 7.** JSON output, git export, and developer experience: `--json` flag, `--exit-code` for scripting, git export with `--from-export` verification, configuration presets.
+- **Phase 7.** JSON output, git export, and developer experience: `--json` flag, `--exit-code` for scripting, git export with `--from-export` verification, configuration presets. Complete.
 - **Phase 8.** Distribution and ecosystem integration: npm global publishing, PR/MR templates consuming exported governance data, SAST webhook templates.
 
 ## Documentation

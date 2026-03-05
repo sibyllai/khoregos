@@ -2,12 +2,11 @@
  * Main CLI entry point for Khoregos.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { DaemonState, isPluginInstalled } from '../daemon/manager.js';
-import { generateSigningKey } from '../engine/signing.js';
 import {
   initTelemetry,
   shutdownTelemetry,
@@ -23,7 +22,6 @@ import {
   generateDefaultConfig,
   K6sConfigSchema,
   loadConfig,
-  saveConfig,
 } from '../models/config.js';
 import { K6sServer } from '../mcp/server.js';
 import { Db } from '../store/db.js';
@@ -34,6 +32,7 @@ import { registerAuditCommands } from './audit.js';
 import { registerHookCommands } from './hook.js';
 import { registerComplianceCommands } from './compliance.js';
 import { registerExportCommand } from './export.js';
+import { registerInitCommand } from './init.js';
 import { output, outputError, resolveJsonOption } from './output.js';
 import { VERSION } from '../version.js';
 
@@ -71,77 +70,7 @@ registerAuditCommands(program);
 registerHookCommands(program);
 registerComplianceCommands(program);
 registerExportCommand(program);
-
-// init
-program
-  .command('init')
-  .description('Initialize Khoregos in the current project')
-  .option('-n, --name <name>', 'Project name (defaults to directory name)')
-  .option('-f, --force', 'Overwrite existing configuration')
-  .action((opts: { name?: string; force?: boolean }) => {
-    const projectRoot = process.cwd();
-    const khoregoDir = path.join(projectRoot, '.khoregos');
-    const configFile = path.join(projectRoot, 'k6s.yaml');
-
-    if (existsSync(configFile) && !opts.force) {
-      console.log(
-        chalk.yellow('Project already initialized.') +
-          ' Use --force to overwrite.',
-      );
-      process.exit(1);
-    }
-
-    const projectName = opts.name ?? path.basename(projectRoot);
-
-    mkdirSync(khoregoDir, { recursive: true });
-    console.log(chalk.green('✓') + ` Created .khoregos/`);
-
-    const config = generateDefaultConfig(projectName);
-    saveConfig(config, configFile);
-    console.log(chalk.green('✓') + ` Created k6s.yaml`);
-
-    if (generateSigningKey(khoregoDir)) {
-      console.log(chalk.green('✓') + ` Created .khoregos/signing.key`);
-    }
-
-    const gitignore = path.join(khoregoDir, '.gitignore');
-    writeFileSync(
-      gitignore,
-      '# Ignore database, daemon state, and signing key\n*.db\n*.db-*\ndaemon.*\nsigning.key\n',
-    );
-    console.log(chalk.green('✓') + ` Created .khoregos/.gitignore`);
-
-    const pluginDetected = isPluginInstalled(projectRoot);
-    console.log();
-    if (pluginDetected) {
-      console.log(chalk.green('✓') + ' Khoregos Claude Code plugin detected');
-    } else {
-      console.log(chalk.yellow('Khoregos Claude Code plugin not detected.'));
-      console.log();
-      console.log(
-        'The plugin provides automatic hook registration, MCP server setup,',
-      );
-      console.log('and governance instructions for agents.');
-      console.log();
-      console.log('To install inside Claude Code, run:');
-      console.log();
-      console.log('  /plugin marketplace add sibyllai/khoregos');
-      console.log('  /plugin install khoregos@sibyllai');
-      console.log();
-      console.log(
-        'Or skip plugin install and continue with direct registration fallback.',
-      );
-    }
-
-    console.log();
-    console.log(chalk.bold.green(`Khoregos initialized for ${projectName}`));
-    console.log();
-    console.log('Next steps:');
-    console.log('  1. Edit k6s.yaml to configure boundaries and audit rules');
-    console.log(
-      `  2. Run ${chalk.bold('k6s team start "your objective"')} to begin a session`,
-    );
-  });
+registerInitCommand(program);
 
 // telemetry smoke
 program
