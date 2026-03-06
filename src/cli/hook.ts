@@ -38,6 +38,7 @@ import {
   findUsageForToolUse,
 } from "../engine/transcript.js";
 import { estimateCost } from "../engine/cost.js";
+import { ingestTranscript } from "../engine/transcript-store.js";
 
 // Maximum bytes to read from stdin before aborting (1 MB).
 // Hook payloads are small JSON objects; anything larger is anomalous.
@@ -503,12 +504,11 @@ export function registerHookCommands(program: Command): void {
         recordToolDurationSeconds(durationMs / 1000);
       }
 
-      // Token usage capture: read new transcript entries and extract usage data
-      // for this tool call. The transcript_path is provided by Claude Code in
-      // every hook payload.
+      // Token usage capture + transcript ingestion.
+      // Both share the same incremental read pass to avoid double-reading.
       const transcriptPath = data.transcript_path as string | undefined;
       const toolUseId = data.tool_use_id as string | undefined;
-      if (transcriptPath && toolUseId) {
+      if (transcriptPath) {
         const offset = sm.getTranscriptOffset(sessionId);
         const { entries, newOffset } = readTranscriptIncremental(
           transcriptPath,
@@ -517,22 +517,38 @@ export function registerHookCommands(program: Command): void {
         if (newOffset > offset) {
           sm.setTranscriptOffset(sessionId, newOffset);
         }
-        const usage = findUsageForToolUse(entries, toolUseId);
-        if (usage) {
-          const costUsd = estimateCost(usage);
-          sm.recordCost({
+
+        // Extract token usage for this specific tool call.
+        if (toolUseId) {
+          const usage = findUsageForToolUse(entries, toolUseId);
+          if (usage) {
+            const costUsd = estimateCost(usage);
+            sm.recordCost({
+              sessionId,
+              agentId,
+              usage,
+              estimatedCostUsd: costUsd,
+              auditEventId: event.id,
+            });
+            recordTokenUsage(
+              usage.inputTokens,
+              usage.outputTokens,
+              costUsd,
+              usage.model,
+            );
+          }
+        }
+
+        // Store transcript entries if configured.
+        if (config && config.transcript?.store !== "off") {
+          ingestTranscript({
+            db,
             sessionId,
             agentId,
-            usage,
-            estimatedCostUsd: costUsd,
-            auditEventId: event.id,
+            transcriptPath,
+            byteOffset: offset,
+            config: config.transcript,
           });
-          recordTokenUsage(
-            usage.inputTokens,
-            usage.outputTokens,
-            costUsd,
-            usage.model,
-          );
         }
       }
 

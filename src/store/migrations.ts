@@ -2,7 +2,7 @@
  * Database schema migrations for Khoregos.
  */
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 type Migration = [version: number, sql: string];
 
@@ -184,6 +184,30 @@ const MIGRATIONS: Migration[] = [
     -- Track the last-read byte offset in the transcript file so incremental
     -- reads only process new lines on each hook invocation.
     ALTER TABLE sessions ADD COLUMN transcript_offset INTEGER DEFAULT 0;
+    `,
+  ],
+  [
+    7,
+    `
+    -- Conversation transcript storage for audit trail.
+    CREATE TABLE IF NOT EXISTS transcript_entries (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      agent_id TEXT REFERENCES agents(id),
+      sequence INTEGER NOT NULL,
+      entry_type TEXT NOT NULL,
+      role TEXT,
+      model TEXT,
+      content TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_creation_input_tokens INTEGER,
+      cache_read_input_tokens INTEGER,
+      timestamp TEXT NOT NULL,
+      redacted INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_transcript_session ON transcript_entries(session_id, sequence);
+    CREATE INDEX IF NOT EXISTS idx_transcript_type ON transcript_entries(session_id, entry_type);
     `,
   ],
 ];

@@ -25,6 +25,10 @@ import type {
 } from "../models/audit.js";
 import { withDb, resolveSessionId } from "./shared.js";
 import { output, outputError, resolveJsonOption } from "./output.js";
+import {
+  queryTranscript,
+  countTranscriptEntries,
+} from "../engine/transcript-store.js";
 
 function parseDuration(duration: string): string {
   const value = parseInt(duration.slice(0, -1), 10);
@@ -1079,4 +1083,116 @@ export function registerAuditCommands(program: Command): void {
         console.log(markdownReport);
       }
     });
+
+  // -- Transcript viewer.
+  audit
+    .command("transcript")
+    .description("View stored conversation transcript entries")
+    .option("-s, --session <id>", "Session ID or 'latest'", "latest")
+    .option("-r, --role <role>", "Filter by role (user, assistant)")
+    .option("-n, --limit <number>", "Maximum entries to show", "50")
+    .option("--offset <number>", "Skip first N entries", "0")
+    .option("--json", "Output in JSON format")
+    .action(
+      (opts: {
+        session: string;
+        role?: string;
+        limit: string;
+        offset: string;
+        json?: boolean;
+      },
+      command: Command) => {
+        const json = resolveJsonOption(opts, command);
+        const projectRoot = process.cwd();
+        if (!existsSync(path.join(projectRoot, ".khoregos", "k6s.db"))) {
+          if (json) {
+            output({ entries: [], total_count: 0 }, { json: true });
+          } else {
+            console.log(chalk.yellow("No audit data found."));
+          }
+          return;
+        }
+
+        const result = withDb(projectRoot, (db) => {
+          const sm = new StateManager(db, projectRoot);
+          const sessionId = resolveSessionId(sm, opts.session);
+          if (!sessionId) return null;
+
+          const limit = parseInt(opts.limit, 10);
+          const offset = parseInt(opts.offset, 10);
+          const entries = queryTranscript(db, sessionId, {
+            limit,
+            offset,
+            role: opts.role,
+          });
+          const totalCount = countTranscriptEntries(db, sessionId);
+          return { sessionId, entries, totalCount };
+        });
+
+        if (json) {
+          if (!result) {
+            output({ entries: [], total_count: 0 }, { json: true });
+            return;
+          }
+          output(
+            {
+              session_id: result.sessionId,
+              entries: result.entries.map((e) => ({
+                id: e.id,
+                sequence: e.sequence,
+                entry_type: e.entryType,
+                role: e.role,
+                model: e.model,
+                content: e.content,
+                input_tokens: e.inputTokens,
+                output_tokens: e.outputTokens,
+                cache_creation_input_tokens: e.cacheCreationInputTokens,
+                cache_read_input_tokens: e.cacheReadInputTokens,
+                timestamp: e.timestamp,
+                redacted: e.redacted,
+              })),
+              total_count: result.totalCount,
+            },
+            { json: true },
+          );
+          return;
+        }
+
+        if (!result || result.entries.length === 0) {
+          console.log(chalk.dim("No transcript entries found."));
+          console.log(chalk.dim("Set transcript.store to 'full' or 'usage-only' in k6s.yaml to enable."));
+          return;
+        }
+
+        console.log(`${chalk.bold("Session:")} ${result.sessionId.slice(0, 8)}...`);
+        console.log(`${chalk.bold("Entries:")} ${result.totalCount} total`);
+        console.log();
+
+        const table = new Table({
+          head: ["Seq", "Time", "Role", "Model", "Tokens", "Content Preview"],
+          colWidths: [6, 10, 10, 20, 12, 50],
+          wordWrap: true,
+        });
+
+        for (const entry of result.entries) {
+          const tokens = entry.inputTokens != null
+            ? `${entry.inputTokens}/${entry.outputTokens ?? 0}`
+            : "—";
+          const contentPreview = entry.content
+            ? entry.content.slice(0, 80).replace(/\n/g, " ")
+            : chalk.dim("(usage-only)");
+          const roleColor = entry.role === "user" ? chalk.cyan : chalk.green;
+          table.push([
+            String(entry.sequence),
+            new Date(entry.timestamp).toTimeString().slice(0, 8),
+            roleColor(entry.role ?? "—"),
+            entry.model ?? "—",
+            tokens,
+            contentPreview + (entry.redacted ? chalk.red(" [R]") : ""),
+          ]);
+        }
+
+        console.log(table.toString());
+      },
+    );
 }

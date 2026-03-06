@@ -48,6 +48,7 @@
     "chokidar": "^4.0.3",
     "cli-table3": "^0.6.5",
     "commander": "^13.1.0",
+    "compromise": "^14.15.0",
     "picomatch": "^4.0.2",
     "ulid": "^2.3.0",
     "yaml": "^2.7.0",

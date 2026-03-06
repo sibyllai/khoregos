@@ -66,7 +66,7 @@ describe("migration v6", () => {
     expect(row!.transcript_offset).toBe(0);
   });
 
-  it("schema version is 6", () => {
-    expect(db.schemaVersion).toBe(6);
+  it("schema version is at least 6", () => {
+    expect(db.schemaVersion).toBeGreaterThanOrEqual(6);
   });
 });
