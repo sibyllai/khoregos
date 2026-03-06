@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Command } from 'commander';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
@@ -22,8 +28,12 @@ describe('init command presets', () => {
     process.chdir(projectRoot);
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    stdoutSpy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(() => true);
+    stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
     exitSpy = vi
       .spyOn(process, 'exit')
       .mockImplementation((code?: string | number | null): never => {
@@ -50,7 +60,9 @@ describe('init command presets', () => {
   it('lists all presets in text mode', async () => {
     const program = createProgram();
     await program.parseAsync(['init', '--list-presets'], { from: 'user' });
-    const output = logSpy.mock.calls.map((call) => String(call[0] ?? '')).join('\n');
+    const output = logSpy.mock.calls
+      .map((call) => String(call[0] ?? ''))
+      .join('\n');
     expect(output).toContain('Available presets:');
     expect(output).toContain('minimal');
     expect(output).toContain('security-strict');
@@ -75,7 +87,7 @@ describe('init command presets', () => {
   it('initializes with selected preset and project-name override', async () => {
     const program = createProgram();
     await program.parseAsync(
-      ['init', '--preset', 'minimal', '--project-name', 'icrc-pearl'],
+      ['init', '--preset', 'minimal', '--project-name', 'acme-corp-project'],
       { from: 'user' },
     );
 
@@ -83,7 +95,7 @@ describe('init command presets', () => {
     expect(rawYaml.startsWith('# Khoregos configuration')).toBe(true);
     expect(rawYaml).toContain('# Generated with preset: minimal');
     const parsed = YAML.parse(rawYaml) as { project: { name: string } };
-    expect(parsed.project.name).toBe('icrc-pearl');
+    expect(parsed.project.name).toBe('acme-corp-project');
   });
 
   it('security-strict preset config has strict boundaries', async () => {
@@ -135,16 +147,23 @@ describe('init command presets', () => {
       from: 'user',
     });
     const monoYaml = readFileSync(path.join(projectRoot, 'k6s.yaml'), 'utf-8');
-    expect(monoYaml).toContain('IMPORTANT: Customize both boundary patterns AND allowed paths');
+    expect(monoYaml).toContain(
+      'IMPORTANT: Customize both boundary patterns AND allowed paths',
+    );
 
     rmSync(path.join(projectRoot, 'k6s.yaml'), { force: true });
     mkdirSync(path.join(projectRoot, '.khoregos'), { recursive: true });
     const microservicesProgram = createProgram();
-    await microservicesProgram.parseAsync(['init', '--preset', 'microservices', '--force'], {
-      from: 'user',
-    });
+    await microservicesProgram.parseAsync(
+      ['init', '--preset', 'microservices', '--force'],
+      {
+        from: 'user',
+      },
+    );
     const microYaml = readFileSync(path.join(projectRoot, 'k6s.yaml'), 'utf-8');
-    expect(microYaml).toContain('IMPORTANT: Customize both boundary patterns AND allowed paths');
+    expect(microYaml).toContain(
+      'IMPORTANT: Customize both boundary patterns AND allowed paths',
+    );
   });
 
   it('compliance-soc2 preset includes inline SIEM webhook stub comment', async () => {
@@ -165,7 +184,9 @@ describe('init command presets', () => {
         from: 'user',
       });
       const rawYaml = readFileSync(path.join(projectRoot, 'k6s.yaml'), 'utf-8');
-      expect(rawYaml).toContain('Set to true once the TSA certificate is installed');
+      expect(rawYaml).toContain(
+        'Set to true once the TSA certificate is installed',
+      );
     }
   });
 });
