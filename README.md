@@ -85,6 +85,8 @@ k6s audit export --format json          # Export for downstream tooling
 k6s cost show                           # Token usage and cost summary
 k6s cost show --by-agent                # Cost breakdown per agent
 k6s cost show --by-model --json         # Per-model breakdown (JSON)
+k6s audit transcript                    # View stored conversation transcript
+k6s audit transcript --role user --json # Filter by role, JSON output
 ```
 
 **Commit the governance record alongside your code:**
@@ -154,6 +156,7 @@ The `sensitive_needs_review` warning on seq 8 fired automatically because the ag
 - **Configuration presets.** Six named presets (`minimal`, `security-strict`, `compliance-soc2`, `compliance-iso27001`, `monorepo`, `microservices`) generate a tailored `k6s.yaml` in one command.
 - **Plugin system.** ESM plugins with lifecycle and event hooks for custom governance logic.
 - **Token usage tracking.** Automatic capture of input/output/cache tokens and estimated costs from Claude Code transcript data. Per-session and per-agent cost breakdowns via `k6s cost show`.
+- **Conversation transcript storage.** Configurable storage of full conversation transcripts in SQLite with two-pass PII redaction (regex patterns + NER via [compromise](https://www.npmjs.com/package/compromise)), thinking-block stripping, and content truncation. Three modes: `full`, `usage-only`, `off`. Query via `k6s audit transcript`.
 - **Observability.** OpenTelemetry traces, Prometheus metrics endpoint, OTLP export. Token usage counters (`k6s_input_tokens_total`, `k6s_output_tokens_total`, `k6s_token_cost_usd_total`).
 - **File locking.** SQLite-based exclusive locks to prevent multi-agent edit collisions.
 

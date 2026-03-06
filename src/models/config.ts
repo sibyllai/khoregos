@@ -96,6 +96,28 @@ export const ObservabilityConfigSchema = z.object({
   webhooks: z.array(WebhookConfigSchema).default([]),
 });
 
+export const RedactionPatternSchema = z.object({
+  name: z.string(),
+  pattern: z.string(),
+  replacement: z.string().default("[REDACTED]"),
+});
+export type RedactionPattern = z.infer<typeof RedactionPatternSchema>;
+
+export const TranscriptConfigSchema = z.object({
+  store: z.enum(["full", "usage-only", "off"]).default("off"),
+  strip_thinking: z.boolean().default(true),
+  ner_redaction: z.boolean().default(true),
+  max_content_length: z.number().default(50_000),
+  redaction_patterns: z.array(RedactionPatternSchema).default([
+    { name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", replacement: "[EMAIL]" },
+    { name: "phone", pattern: "\\b\\d{3}[\\-.]?\\d{3}[\\-.]?\\d{4}\\b", replacement: "[PHONE]" },
+    { name: "ssn", pattern: "\\b\\d{3}-\\d{2}-\\d{4}\\b", replacement: "[SSN]" },
+    { name: "credit_card", pattern: "\\b\\d{4}[\\- ]?\\d{4}[\\- ]?\\d{4}[\\- ]?\\d{4}\\b", replacement: "[CREDIT_CARD]" },
+    { name: "api_key", pattern: "(?:sk|pk|api|key|token|secret|password)[_\\-]?[a-zA-Z0-9]{16,}", replacement: "[API_KEY]" },
+  ]),
+});
+export type TranscriptConfig = z.infer<typeof TranscriptConfigSchema>;
+
 export const PluginConfigSchema = z.object({
   name: z.string(),
   module: z.string(),
@@ -110,6 +132,7 @@ export const K6sConfigSchema = z.object({
   boundaries: z.array(BoundaryConfigSchema).default([]),
   gates: z.array(GateConfigSchema).default([]),
   observability: ObservabilityConfigSchema.default({}),
+  transcript: TranscriptConfigSchema.default({}),
   plugins: z.array(PluginConfigSchema).default([]),
 });
 export type K6sConfig = z.infer<typeof K6sConfigSchema>;
