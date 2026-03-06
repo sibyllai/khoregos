@@ -1,7 +1,7 @@
 {
   "name": "khoregos",
   "description": "Enterprise governance for Claude Code Agent Teams. Audit trails, agent boundaries, workspace governance persistence, and compliance tooling.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": {
     "name": "Sibyllai",
     "url": "https://github.com/sibyllai"
@@ -16,10 +16,18 @@
     "enterprise"
   ],
   "components": {
-    "hooks": ["hooks/hooks.json"],
-    "skills": ["skills/governance/SKILL.md"],
-    "commands": ["commands/"],
-    "mcpServers": [".mcp.json"]
+    "hooks": [
+      "hooks/hooks.json"
+    ],
+    "skills": [
+      "skills/governance/SKILL.md"
+    ],
+    "commands": [
+      "commands/"
+    ],
+    "mcpServers": [
+      ".mcp.json"
+    ]
   },
   "license": "MIT"
 }
