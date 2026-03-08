@@ -89,6 +89,17 @@ k6s audit transcript                    # View stored conversation transcript
 k6s audit transcript --role user --json # Filter by role, JSON output
 ```
 
+**Open the real-time dashboard:**
+
+```bash
+k6s dashboard                              # Standalone
+k6s team start "implement auth" --dashboard # Or with team start
+```
+
+![Khoregos Dashboard](docs/k6s-dashboard.jpg)
+
+The dashboard serves a self-contained HTML page on localhost with SSE-powered live updates — audit trail, cost tracking, agent status, sensitive review items, and conversation transcript in one view.
+
 **Commit the governance record alongside your code:**
 
 ```bash
@@ -157,6 +168,7 @@ The `sensitive_needs_review` warning on seq 8 fired automatically because the ag
 - **Plugin system.** ESM plugins with lifecycle and event hooks for custom governance logic.
 - **Token usage tracking.** Automatic capture of input/output/cache tokens and estimated costs from Claude Code transcript data. Per-session and per-agent cost breakdowns via `k6s cost show`.
 - **Conversation transcript storage.** Configurable storage of full conversation transcripts in SQLite with two-pass PII redaction (regex patterns + NER via [compromise](https://www.npmjs.com/package/compromise)), thinking-block stripping, and content truncation. Three modes: `full`, `usage-only`, `off`. Query via `k6s audit transcript`.
+- **Real-time dashboard.** Built-in HTTP server with SSE live updates. Audit trail table, cost summary, agent cards, sensitive review panel, conversation transcript, and event timeline — all in one self-contained page. Launch with `k6s dashboard` or `k6s team start --dashboard`.
 - **Observability.** OpenTelemetry traces, Prometheus metrics endpoint, OTLP export, Langfuse LLM observability (opt-in). Token usage counters (`k6s_input_tokens_total`, `k6s_output_tokens_total`, `k6s_token_cost_usd_total`).
 - **File locking.** SQLite-based exclusive locks to prevent multi-agent edit collisions.
 
@@ -185,7 +197,7 @@ When the plugin is not installed, `k6s team start` falls back to direct filesyst
 │  Lead ──► Teammate 1 ──► Teammate 2 ──► Teammate N           │
 │  Hook events: post-tool-use, subagent-start/stop, stop       │
 ├──────────────────────────────────────────────────────────────┤
-│  OpenTelemetry  │  Prometheus  │  Langfuse  │  Webhooks       │
+│  Dashboard (SSE) │  OpenTelemetry │  Prometheus │  Langfuse │  Webhooks │
 └──────────────────────────────────────────────────────────────┘
 ```
 
