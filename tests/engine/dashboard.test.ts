@@ -132,6 +132,21 @@ describe("DashboardServer", () => {
     expect(data.items.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("returns transcript entries via REST API", async () => {
+    const res = await httpGet(`http://127.0.0.1:${port}/api/transcript`);
+    expect(res.status).toBe(200);
+    const data = JSON.parse(res.body);
+    expect(data.entries).toBeDefined();
+    expect(Array.isArray(data.entries)).toBe(true);
+  });
+
+  it("accepts role filter on transcript endpoint", async () => {
+    const res = await httpGet(`http://127.0.0.1:${port}/api/transcript?role=user&limit=10`);
+    expect(res.status).toBe(200);
+    const data = JSON.parse(res.body);
+    expect(data.entries).toBeDefined();
+  });
+
   it("rejects POST /api/push without valid token", async () => {
     const res = await httpPost(
       `http://127.0.0.1:${port}/api/push`,

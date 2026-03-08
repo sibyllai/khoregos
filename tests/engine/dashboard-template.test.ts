@@ -71,6 +71,20 @@ describe("getDashboardHTML", () => {
     expect(html).toContain("exportCSV");
   });
 
+  it("contains sort order toggle defaulting to newest first", () => {
+    const html = getDashboardHTML(sessionId, config);
+    expect(html).toContain("sortNewest");
+    expect(html).toContain("Newest first");
+    // Checkbox is checked by default.
+    expect(html).toContain('id="sortNewest" checked');
+  });
+
+  it("contains transcript toggle and API reference", () => {
+    const html = getDashboardHTML(sessionId, config);
+    expect(html).toContain("showTranscript");
+    expect(html).toContain("/api/transcript");
+  });
+
   it("escapes HTML in project name", () => {
     const xssConfig = K6sConfigSchema.parse({ project: { name: '<script>alert("xss")</script>' } });
     const html = getDashboardHTML(sessionId, xssConfig);

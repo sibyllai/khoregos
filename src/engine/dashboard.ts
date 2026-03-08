@@ -266,6 +266,9 @@ export class DashboardServer {
     if (pathname === "/api/review" && req.method === "GET") {
       return this.apiReview(res);
     }
+    if (pathname === "/api/transcript" && req.method === "GET") {
+      return this.apiTranscript(url, res);
+    }
     if (pathname === "/api/push" && req.method === "POST") {
       return this.apiPush(req, res);
     }
@@ -400,6 +403,34 @@ export class DashboardServer {
 
     const items = rows.map((r) => this.rowToEvent(r));
     this.jsonResponse(res, { items });
+  }
+
+  private apiTranscript(url: URL, res: ServerResponse): void {
+    const sessionId = this.opts.sessionId;
+    const limit = Math.min(Number(url.searchParams.get("limit") ?? "200"), 1000);
+    const role = url.searchParams.get("role") ?? "";
+
+    let sql = `SELECT id, session_id, agent_id, sequence, entry_type, role, model,
+                      content, input_tokens, output_tokens, timestamp, redacted
+               FROM transcript_entries
+               WHERE session_id = ?`;
+    const params: unknown[] = [sessionId];
+
+    if (role) {
+      sql += " AND role = ?";
+      params.push(role);
+    }
+
+    sql += " ORDER BY sequence ASC LIMIT ?";
+    params.push(limit);
+
+    try {
+      const rows = this.opts.db.fetchAll(sql, params);
+      this.jsonResponse(res, { entries: rows });
+    } catch {
+      // Table might not exist if transcripts are disabled.
+      this.jsonResponse(res, { entries: [] });
+    }
   }
 
   private apiPush(req: IncomingMessage, res: ServerResponse): void {
