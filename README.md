@@ -157,7 +157,7 @@ The `sensitive_needs_review` warning on seq 8 fired automatically because the ag
 - **Plugin system.** ESM plugins with lifecycle and event hooks for custom governance logic.
 - **Token usage tracking.** Automatic capture of input/output/cache tokens and estimated costs from Claude Code transcript data. Per-session and per-agent cost breakdowns via `k6s cost show`.
 - **Conversation transcript storage.** Configurable storage of full conversation transcripts in SQLite with two-pass PII redaction (regex patterns + NER via [compromise](https://www.npmjs.com/package/compromise)), thinking-block stripping, and content truncation. Three modes: `full`, `usage-only`, `off`. Query via `k6s audit transcript`.
-- **Observability.** OpenTelemetry traces, Prometheus metrics endpoint, OTLP export. Token usage counters (`k6s_input_tokens_total`, `k6s_output_tokens_total`, `k6s_token_cost_usd_total`).
+- **Observability.** OpenTelemetry traces, Prometheus metrics endpoint, OTLP export, Langfuse LLM observability (opt-in). Token usage counters (`k6s_input_tokens_total`, `k6s_output_tokens_total`, `k6s_token_cost_usd_total`).
 - **File locking.** SQLite-based exclusive locks to prevent multi-agent edit collisions.
 
 ## How it works (without patching Claude Code)
@@ -185,18 +185,18 @@ When the plugin is not installed, `k6s team start` falls back to direct filesyst
 │  Lead ──► Teammate 1 ──► Teammate 2 ──► Teammate N           │
 │  Hook events: post-tool-use, subagent-start/stop, stop       │
 ├──────────────────────────────────────────────────────────────┤
-│  OpenTelemetry  │  Prometheus  │  Webhooks                   │
+│  OpenTelemetry  │  Prometheus  │  Langfuse  │  Webhooks       │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Stack:** TypeScript (strict, ESM), Node.js 18+, SQLite via better-sqlite3, Commander.js, Zod, picomatch, chokidar, @opentelemetry/\*.
+**Stack:** TypeScript (strict, ESM), Node.js 18+, SQLite via better-sqlite3, Commander.js, Zod, picomatch, chokidar, @opentelemetry/\*, langfuse.
 
 ## Who this is for
 
 | You are...                                                     | You care about...                                  | Khoregos gives you...                                           |
 | -------------------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------- |
 | **Enterprise dev team**                                        | Compliance, accountability, audit evidence         | HMAC-signed trails, compliance reports, workspace persistence   |
-| **DevSecOps engineer**                                         | Integrating AI agents into security pipelines      | OpenTelemetry export, Prometheus metrics, webhook dispatch      |
+| **DevSecOps engineer**                                         | Integrating AI agents into security pipelines      | OpenTelemetry export, Prometheus metrics, Langfuse, webhooks    |
 | **Regulated industry** (finance, healthcare, government, NGOs) | Provenance, change management, defensible evidence | Audit export, boundary enforcement, data classification         |
 | **Platform team**                                              | Standardization across developers and projects     | Configuration-driven governance, MCP integration, plugin system |
 | **Individual developer**                                       | Understanding what agents actually did             | `k6s audit show`, `k6s audit tail`, workspace history           |

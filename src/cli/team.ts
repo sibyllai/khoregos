@@ -38,12 +38,19 @@ import {
   redactEndpointForLogs,
   recordSessionStart,
 } from "../engine/telemetry.js";
-import { loadConfig, sanitizeConfigForStorage } from "../models/config.js";
+import { loadConfig, sanitizeConfigForStorage, detectHardcodedSecrets } from "../models/config.js";
 import { type Session, type SessionState, sessionDurationSeconds } from "../models/session.js";
 import { Db } from "../store/db.js";
 import { StateManager } from "../engine/state.js";
 import { WebhookDispatcher } from "../engine/webhooks.js";
 import { VERSION } from "../version.js";
+import {
+  initLangfuse,
+  shutdownLangfuse,
+  createSessionTrace,
+  updateSessionTrace,
+  scoreSession,
+} from "../engine/langfuse.js";
 import { output, resolveJsonOption } from "./output.js";
 
 const SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH = 200;
@@ -271,6 +278,13 @@ export function registerTeamCommands(program: Command): void {
       // When the Prometheus daemon is running it owns all metric export.
       // The CLI process only needs OTLP tracing in that case.
       initTelemetry(config, { skipMetrics: prometheusEnabled });
+      initLangfuse(config);
+
+      // Warn about hardcoded secrets in the config file.
+      const secretWarnings = detectHardcodedSecrets(config);
+      for (const warning of secretWarnings) {
+        console.error(chalk.yellow(`⚠ Security: ${warning}`));
+      }
 
       const operator =
         process.env.USER ??
@@ -328,6 +342,15 @@ export function registerTeamCommands(program: Command): void {
           },
         );
         recordSessionStart();
+
+        createSessionTrace({
+          sessionId: s.id,
+          objective,
+          operator: s.operator,
+          gitBranch: s.gitBranch,
+          gitSha: s.gitSha,
+          traceId: s.traceId,
+        });
 
         // Auto-prune old audit/session data (best-effort).
         const auditCutoff = new Date();
@@ -427,6 +450,7 @@ export function registerTeamCommands(program: Command): void {
         console.log();
         console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
       }
+      await shutdownLangfuse();
       await shutdownTelemetry();
     });
 
@@ -453,8 +477,15 @@ export function registerTeamCommands(program: Command): void {
         const config = loadConfig(configFile);
         const prometheusEnabled = config.observability?.prometheus?.enabled === true;
         initTelemetry(config, { skipMetrics: prometheusEnabled });
+        initLangfuse(config);
         if (config.observability?.webhooks?.length) {
           setWebhookDispatcher(new WebhookDispatcher(config.observability.webhooks));
+        }
+
+        // Warn about hardcoded secrets on stop as well.
+        const secretWarnings = detectHardcodedSecrets(config);
+        for (const warning of secretWarnings) {
+          console.error(chalk.yellow(`⚠ Security: ${warning}`));
         }
       }
 
@@ -466,6 +497,25 @@ export function registerTeamCommands(program: Command): void {
       withDb(projectRoot, (db) => {
         const sm = new StateManager(db, projectRoot);
         sm.markSessionCompleted(sessionId);
+
+        // Score the session trace with total cost if Langfuse is active.
+        updateSessionTrace({
+          sessionId,
+          metadata: { state: "completed", ended_at: new Date().toISOString() },
+        });
+        const costRow = db.fetchOne(
+          "SELECT COALESCE(SUM(estimated_cost_usd), 0) as total FROM cost_records WHERE session_id = ?",
+          [sessionId],
+        );
+        const totalCost = Number(costRow?.total ?? 0);
+        if (totalCost > 0) {
+          scoreSession({
+            sessionId,
+            name: "total_cost_usd",
+            value: totalCost,
+            comment: `Session cost: $${totalCost.toFixed(4)}`,
+          });
+        }
       });
 
       const pluginManager = getPluginManager();
@@ -484,6 +534,7 @@ export function registerTeamCommands(program: Command): void {
       stopTelemetryDaemon(projectRoot);
 
       setWebhookDispatcher(null);
+      await shutdownLangfuse();
       await shutdownTelemetry();
 
       console.log(chalk.green("✓") + ` Session ${sessionId.slice(0, 8)}... stopped`);
@@ -569,6 +620,13 @@ export function registerTeamCommands(program: Command): void {
         }
 
         initTelemetry(config, { skipMetrics: prometheusEnabled });
+        initLangfuse(config);
+
+        // Warn about hardcoded secrets.
+        const secretWarnings = detectHardcodedSecrets(config);
+        for (const w of secretWarnings) {
+          console.error(chalk.yellow(`⚠ Security: ${w}`));
+        }
 
         const newSession = sm.createSession({
           objective: prev.objective,
@@ -599,6 +657,15 @@ export function registerTeamCommands(program: Command): void {
           },
         );
         recordSessionStart();
+
+        createSessionTrace({
+          sessionId: newSession.id,
+          objective: newSession.objective,
+          operator: prev.operator,
+          gitBranch: prev.gitBranch,
+          gitSha: prev.gitSha,
+          traceId: newSession.traceId,
+        });
 
         const teamKey = loadSigningKey(khoregoDir);
         const logger = new AuditLogger(db, newSession.id, newSession.traceId, teamKey);
@@ -663,6 +730,7 @@ export function registerTeamCommands(program: Command): void {
       console.log("  " + chalk.cyan.bold("claude"));
       console.log();
       console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
+      await shutdownLangfuse();
       await shutdownTelemetry();
     });
 

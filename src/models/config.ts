@@ -89,9 +89,22 @@ export const WebhookConfigSchema = z.object({
   secret: z.string().optional(),
 });
 
+export const LangfuseConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  // SECURITY: Always use environment variable references ($LANGFUSE_SECRET_KEY).
+  // Never hardcode API keys in k6s.yaml — the config file is committed to git.
+  secret_key: z.string().optional(),
+  public_key: z.string().optional(),
+  base_url: z.string().default("https://cloud.langfuse.com"),
+  flush_at: z.number().default(15),
+  flush_interval: z.number().default(5000),
+});
+export type LangfuseConfig = z.infer<typeof LangfuseConfigSchema>;
+
 export const ObservabilityConfigSchema = z.object({
   prometheus: PrometheusConfigSchema.default({}),
   opentelemetry: OpenTelemetryConfigSchema.default({}),
+  langfuse: LangfuseConfigSchema.default({}),
   timestamping: TimestampingConfigSchema.optional(),
   webhooks: z.array(WebhookConfigSchema).default([]),
 });
@@ -161,10 +174,10 @@ export function saveConfig(config: K6sConfig, filePath: string): void {
 }
 
 /**
- * Resolve a webhook secret value. If it starts with "$", treat it as an
+ * Resolve a secret value. If it starts with "$", treat it as an
  * environment variable name and return the env value (or undefined).
  */
-export function resolveWebhookSecret(secret: string | undefined): string | undefined {
+export function resolveSecret(secret: string | undefined): string | undefined {
   if (!secret) return undefined;
   if (secret.startsWith("$")) {
     const envName = secret.slice(1);
@@ -173,8 +186,54 @@ export function resolveWebhookSecret(secret: string | undefined): string | undef
   return secret;
 }
 
+/** @deprecated Use resolveSecret instead. */
+export const resolveWebhookSecret = resolveSecret;
+
 /**
- * Return a deep copy of the config with webhook secrets redacted.
+ * Check whether a secret value looks like it was hardcoded rather than
+ * provided via an environment variable reference ($ENV_VAR).
+ */
+export function isHardcodedSecret(value: string | undefined): boolean {
+  if (!value) return false;
+  if (value === "[REDACTED]") return false;
+  return !value.startsWith("$");
+}
+
+/**
+ * Scan the config for hardcoded secrets and return warnings.
+ * Call on session start/stop to alert operators about insecure config.
+ */
+export function detectHardcodedSecrets(config: K6sConfig): string[] {
+  const warnings: string[] = [];
+
+  for (let i = 0; i < (config.observability?.webhooks ?? []).length; i++) {
+    const wh = config.observability.webhooks[i];
+    if (isHardcodedSecret(wh.secret)) {
+      warnings.push(
+        `observability.webhooks[${i}].secret appears to be hardcoded. Use an environment variable reference (e.g. "$K6S_WEBHOOK_SECRET") instead.`,
+      );
+    }
+  }
+
+  const lf = config.observability?.langfuse;
+  if (lf?.enabled) {
+    if (isHardcodedSecret(lf.secret_key)) {
+      warnings.push(
+        `observability.langfuse.secret_key appears to be hardcoded. Use an environment variable reference (e.g. "$LANGFUSE_SECRET_KEY") instead.`,
+      );
+    }
+    if (isHardcodedSecret(lf.public_key)) {
+      warnings.push(
+        `observability.langfuse.public_key appears to be hardcoded. Use an environment variable reference (e.g. "$LANGFUSE_PUBLIC_KEY") instead.`,
+      );
+    }
+  }
+
+  return warnings;
+}
+
+/**
+ * Return a deep copy of the config with all secrets redacted.
  * Use this before persisting config snapshots to the database.
  */
 export function sanitizeConfigForStorage(config: K6sConfig): K6sConfig {
@@ -183,6 +242,11 @@ export function sanitizeConfigForStorage(config: K6sConfig): K6sConfig {
     if (wh.secret) {
       wh.secret = "[REDACTED]";
     }
+  }
+  const lf = copy.observability?.langfuse;
+  if (lf) {
+    if (lf.secret_key) lf.secret_key = "[REDACTED]";
+    if (lf.public_key) lf.public_key = "[REDACTED]";
   }
   return copy;
 }

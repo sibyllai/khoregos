@@ -39,6 +39,14 @@ import {
 } from "../engine/transcript.js";
 import { estimateCost } from "../engine/cost.js";
 import { ingestTranscript } from "../engine/transcript-store.js";
+import {
+  initLangfuse,
+  shutdownLangfuse,
+  recordGeneration,
+  createAgentSpan,
+  endAgentSpan,
+  recordLangfuseEvent,
+} from "../engine/langfuse.js";
 
 // Maximum bytes to read from stdin before aborting (1 MB).
 // Hook payloads are small JSON objects; anything larger is anomalous.
@@ -215,6 +223,7 @@ function initHookTelemetry(projectRoot: string): void {
   if (!existsSync(configPath)) return;
   const config = loadConfigOrDefault(configPath, "project");
   initTelemetry(config);
+  initLangfuse(config);
 }
 
 function logEvent(opts: {
@@ -536,6 +545,27 @@ export function registerHookCommands(program: Command): void {
               costUsd,
               usage.model,
             );
+
+            recordGeneration({
+              sessionId,
+              agentId,
+              name: toolName,
+              model: usage.model,
+              input: truncate(toolInput ?? {}, 2000),
+              output: truncate(toolResponse ?? "", 2000),
+              usage: {
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                cacheCreationInputTokens: usage.cacheCreationInputTokens,
+                cacheReadInputTokens: usage.cacheReadInputTokens,
+              },
+              costUsd,
+              metadata: {
+                severity,
+                files_affected: filesAffected,
+                tool_use_id: toolUseId,
+              },
+            });
           }
         }
 
@@ -579,6 +609,13 @@ export function registerHookCommands(program: Command): void {
               severity: "warning",
             });
             logger.stop();
+
+            recordLangfuseEvent({
+              sessionId,
+              agentId,
+              name: `gate_triggered: ${ruleName}`,
+              metadata: { rule_id: ruleId, file: relative },
+            });
           }
         }
       }
@@ -624,6 +661,7 @@ export function registerHookCommands(program: Command): void {
 
     } finally {
       db.close();
+      await shutdownLangfuse();
       await shutdownTelemetry();
     }
   });
@@ -674,8 +712,15 @@ export function registerHookCommands(program: Command): void {
         },
       );
       recordActiveAgentDelta(1);
+
+      createAgentSpan({
+        sessionId,
+        agentId: agent.id,
+        agentName,
+      });
     } finally {
       db.close();
+      await shutdownLangfuse();
       await shutdownTelemetry();
     }
   });
@@ -728,8 +773,13 @@ export function registerHookCommands(program: Command): void {
         span.end();
       });
       recordActiveAgentDelta(-1);
+
+      if (agentId) {
+        endAgentSpan({ sessionId, agentId });
+      }
     } finally {
       db.close();
+      await shutdownLangfuse();
       await shutdownTelemetry();
     }
   });

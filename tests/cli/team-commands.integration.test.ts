@@ -75,6 +75,7 @@ vi.mock("../../src/daemon/manager.js", () => {
 vi.mock("../../src/models/config.js", () => ({
   loadConfig: (...args: unknown[]) => loadConfigMock(...args),
   sanitizeConfigForStorage: vi.fn((cfg) => cfg),
+  detectHardcodedSecrets: vi.fn(() => []),
 }));
 
 vi.mock("../../src/engine/signing.js", () => ({
@@ -102,6 +103,7 @@ vi.mock("../../src/store/db.js", () => ({
   Db: class {
     connect(): void {}
     close(): void {}
+    fetchOne(): Record<string, unknown> | null { return { total: 0 }; }
   },
 }));
 
@@ -147,6 +149,14 @@ vi.mock("../../src/engine/state.js", () => ({
     }
     saveContext(): void {}
   },
+}));
+
+vi.mock("../../src/engine/langfuse.js", () => ({
+  initLangfuse: vi.fn(),
+  shutdownLangfuse: vi.fn(async () => {}),
+  createSessionTrace: vi.fn(() => null),
+  updateSessionTrace: vi.fn(),
+  scoreSession: vi.fn(),
 }));
 
 vi.mock("../../src/engine/telemetry.js", () => ({
