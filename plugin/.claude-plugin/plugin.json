@@ -1,7 +1,7 @@
 {
   "name": "khoregos",
   "description": "Enterprise governance for Claude Code Agent Teams. Audit trails, agent boundaries, workspace governance persistence, and compliance tooling.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": {
     "name": "Sibyllai",
     "url": "https://github.com/sibyllai"
