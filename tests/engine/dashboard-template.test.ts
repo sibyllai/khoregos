@@ -65,10 +65,18 @@ describe("getDashboardHTML", () => {
     expect(html).toContain("searchInput");
   });
 
-  it("contains export buttons", () => {
+  it("contains export dropdown with all export options", () => {
     const html = getDashboardHTML(sessionId, config);
     expect(html).toContain("exportJSON");
     expect(html).toContain("exportCSV");
+    expect(html).toContain("exportFullJSON");
+    expect(html).toContain("exportFullCSV");
+    expect(html).toContain("exportReportGeneric");
+    expect(html).toContain("exportReportSoc2");
+    expect(html).toContain("exportReportIso");
+    expect(html).toContain("exportReportJSON");
+    expect(html).toContain("/api/export/events");
+    expect(html).toContain("/api/export/report");
   });
 
   it("contains sort order toggle defaulting to newest first", () => {

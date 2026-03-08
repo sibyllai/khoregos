@@ -98,6 +98,26 @@ export function getDashboardHTML(sessionId: string, config: K6sConfig): string {
     }
     .btn:hover { background: var(--surface-2); }
     .btn-amber { border-color: var(--amber); color: var(--amber); }
+    .export-dropdown { position: relative; }
+    .export-dropdown-menu {
+      display: none; position: absolute; top: 100%; right: 0; margin-top: 4px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
+      min-width: 220px; z-index: 200; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .export-dropdown-menu.open { display: block; }
+    .export-dropdown-menu .export-group {
+      padding: 6px 10px 2px; font-size: 10px; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--text-dim); font-weight: 600;
+    }
+    .export-dropdown-menu button {
+      display: block; width: 100%; text-align: left; padding: 6px 14px;
+      background: none; border: none; color: var(--text); font-size: 12px;
+      font-family: inherit; cursor: pointer;
+    }
+    .export-dropdown-menu button:hover { background: var(--surface-2); }
+    .export-dropdown-menu hr {
+      border: none; border-top: 1px solid var(--border); margin: 4px 0;
+    }
 
     .filter-bar {
       display: flex; gap: 8px; padding: 12px 24px;
@@ -260,8 +280,24 @@ export function getDashboardHTML(sessionId: string, config: K6sConfig): string {
         <option value="${escapeHTML(sessionId)}">${escapeHTML(shortId)}... (current)</option>
       </select>
       <button class="btn" id="themeToggle" title="Toggle theme">Theme</button>
-      <button class="btn" id="exportJSON" title="Export filtered events as JSON">JSON</button>
-      <button class="btn" id="exportCSV" title="Export filtered events as CSV">CSV</button>
+      <div class="export-dropdown">
+        <button class="btn" id="exportToggle">Export &#9662;</button>
+        <div class="export-dropdown-menu" id="exportMenu">
+          <div class="export-group">Filtered view</div>
+          <button id="exportJSON">Events JSON (filtered)</button>
+          <button id="exportCSV">Events CSV (filtered)</button>
+          <hr>
+          <div class="export-group">Full audit export</div>
+          <button id="exportFullJSON">Audit trail JSON</button>
+          <button id="exportFullCSV">Audit trail CSV</button>
+          <hr>
+          <div class="export-group">Compliance report</div>
+          <button id="exportReportGeneric">Report — Generic (Markdown)</button>
+          <button id="exportReportSoc2">Report — SOC 2 (Markdown)</button>
+          <button id="exportReportIso">Report — ISO 27001 (Markdown)</button>
+          <button id="exportReportJSON">Report — JSON</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -721,25 +757,16 @@ export function getDashboardHTML(sessionId: string, config: K6sConfig): string {
     fetchInitial();
   });
 
-  // Export.
-  document.getElementById('exportJSON').addEventListener('click', () => {
-    const data = JSON.stringify(getFilteredEvents(), null, 2);
-    download('k6s-events.json', data, 'application/json');
+  // Export dropdown.
+  const exportToggle = document.getElementById('exportToggle');
+  const exportMenu = document.getElementById('exportMenu');
+  exportToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportMenu.classList.toggle('open');
   });
-  document.getElementById('exportCSV').addEventListener('click', () => {
-    const rows = getFilteredEvents();
-    const lines = ['sequence,timestamp,event_type,severity,agent_id,action'];
-    function csvSafe(s) {
-      let str = String(s);
-      // Prevent CSV formula injection in spreadsheet applications.
-      if (/^[=+\\-@\\t\\r]/.test(str)) str = "'" + str;
-      return '"' + str.replace(/"/g, '""') + '"';
-    }
-    rows.forEach((r) => {
-      lines.push([r.sequence, r.timestamp, r.event_type, r.severity, r.agent_id || '', csvSafe(r.action || '')].join(','));
-    });
-    download('k6s-events.csv', lines.join('\\n'), 'text/csv');
-  });
+  document.addEventListener('click', () => { exportMenu.classList.remove('open'); });
+  exportMenu.addEventListener('click', (e) => { e.stopPropagation(); });
+
   function download(name, content, type) {
     const blob = new Blob([content], { type: type });
     const a = document.createElement('a');
@@ -748,6 +775,62 @@ export function getDashboardHTML(sessionId: string, config: K6sConfig): string {
     a.click();
     URL.revokeObjectURL(a.href);
   }
+
+  function downloadUrl(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.click();
+  }
+
+  function csvSafe(s) {
+    let str = String(s);
+    if (/^[=+\\-@\\t\\r]/.test(str)) str = "'" + str;
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+
+  // Filtered view exports.
+  document.getElementById('exportJSON').addEventListener('click', () => {
+    const data = JSON.stringify(getFilteredEvents(), null, 2);
+    download('k6s-events-filtered.json', data, 'application/json');
+    exportMenu.classList.remove('open');
+  });
+  document.getElementById('exportCSV').addEventListener('click', () => {
+    const rows = getFilteredEvents();
+    const lines = ['sequence,timestamp,event_type,severity,agent_id,action'];
+    rows.forEach((r) => {
+      lines.push([r.sequence, r.timestamp, r.event_type, r.severity, r.agent_id || '', csvSafe(r.action || '')].join(','));
+    });
+    download('k6s-events-filtered.csv', lines.join('\\n'), 'text/csv');
+    exportMenu.classList.remove('open');
+  });
+
+  // Full audit exports (server-side).
+  document.getElementById('exportFullJSON').addEventListener('click', () => {
+    downloadUrl('/api/export/events?format=json');
+    exportMenu.classList.remove('open');
+  });
+  document.getElementById('exportFullCSV').addEventListener('click', () => {
+    downloadUrl('/api/export/events?format=csv');
+    exportMenu.classList.remove('open');
+  });
+
+  // Compliance report exports (server-side).
+  document.getElementById('exportReportGeneric').addEventListener('click', () => {
+    downloadUrl('/api/export/report?standard=generic&format=markdown');
+    exportMenu.classList.remove('open');
+  });
+  document.getElementById('exportReportSoc2').addEventListener('click', () => {
+    downloadUrl('/api/export/report?standard=soc2&format=markdown');
+    exportMenu.classList.remove('open');
+  });
+  document.getElementById('exportReportIso').addEventListener('click', () => {
+    downloadUrl('/api/export/report?standard=iso27001&format=markdown');
+    exportMenu.classList.remove('open');
+  });
+  document.getElementById('exportReportJSON').addEventListener('click', () => {
+    downloadUrl('/api/export/report?standard=generic&format=json');
+    exportMenu.classList.remove('open');
+  });
 
   // Transcript panel.
   let transcriptLoaded = false;

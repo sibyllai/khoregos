@@ -8,10 +8,15 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, request as httpRequest } from "node:http";
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Db } from "../store/db.js";
 import type { K6sConfig } from "../models/config.js";
 import { getDashboardHTML } from "./dashboard-template.js";
+import { generateAuditReport, type ReportStandard } from "./report.js";
+import { AuditLogger } from "./audit.js";
+import { StateManager } from "./state.js";
+import { loadSigningKey, verifyChain, type VerifyError } from "./signing.js";
 
 export interface DashboardServerOptions {
   db: Db;
@@ -19,6 +24,7 @@ export interface DashboardServerOptions {
   sessionId: string;
   port: number;
   host: string;
+  projectRoot?: string;
 }
 
 /** Hosts that are safe to bind without explicit opt-in. */
@@ -269,6 +275,12 @@ export class DashboardServer {
     if (pathname === "/api/transcript" && req.method === "GET") {
       return this.apiTranscript(url, res);
     }
+    if (pathname === "/api/export/events" && req.method === "GET") {
+      return this.apiExportEvents(url, res);
+    }
+    if (pathname === "/api/export/report" && req.method === "GET") {
+      return this.apiExportReport(url, res);
+    }
     if (pathname === "/api/push" && req.method === "POST") {
       return this.apiPush(req, res);
     }
@@ -431,6 +443,171 @@ export class DashboardServer {
       // Table might not exist if transcripts are disabled.
       this.jsonResponse(res, { entries: [] });
     }
+  }
+
+  private apiExportEvents(url: URL, res: ServerResponse): void {
+    const sessionId = this.opts.sessionId;
+    const format = url.searchParams.get("format") ?? "json";
+
+    const al = new AuditLogger(this.opts.db, sessionId);
+    const events = al.getEvents({ limit: 10000 });
+
+    if (format === "csv") {
+      const header = "timestamp,sequence,session_id,agent_id,severity,event_type,action,files_affected";
+      const rows = events.map((e) => {
+        const files = e.filesAffected
+          ? JSON.parse(e.filesAffected).join(";")
+          : "";
+        const action = String(e.action ?? "").replace(/"/g, '""');
+        return [
+          e.timestamp, e.sequence, e.sessionId, e.agentId ?? "",
+          e.severity ?? "info", e.eventType, `"${action}"`, files,
+        ].join(",");
+      });
+      const csv = [header, ...rows].join("\n");
+      res.writeHead(200, {
+        "Content-Type": "text/csv",
+        "Content-Disposition": `attachment; filename="k6s-events-${sessionId.slice(0, 8)}.csv"`,
+      });
+      res.end(csv);
+      return;
+    }
+
+    // Default: JSON
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Disposition": `attachment; filename="k6s-events-${sessionId.slice(0, 8)}.json"`,
+    });
+    res.end(JSON.stringify(events, null, 2));
+  }
+
+  private apiExportReport(url: URL, res: ServerResponse): void {
+    const sessionId = this.opts.sessionId;
+    const standardParam = url.searchParams.get("standard") ?? "generic";
+    const format = url.searchParams.get("format") ?? "markdown";
+
+    const validStandards = ["generic", "soc2", "iso27001"];
+    if (!validStandards.includes(standardParam)) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "standard must be one of: generic, soc2, iso27001" }));
+      return;
+    }
+    const standard = standardParam as ReportStandard;
+    const projectRoot = this.opts.projectRoot ?? process.cwd();
+
+    if (format === "json") {
+      const reportData = this.buildReportJson(sessionId, projectRoot);
+      if (!reportData) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "session not found" }));
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Content-Disposition": `attachment; filename="k6s-report-${standard}-${sessionId.slice(0, 8)}.json"`,
+      });
+      res.end(JSON.stringify(reportData, null, 2));
+      return;
+    }
+
+    // Default: markdown
+    const markdown = generateAuditReport(this.opts.db, sessionId, projectRoot, standard);
+    res.writeHead(200, {
+      "Content-Type": "text/markdown; charset=utf-8",
+      "Content-Disposition": `attachment; filename="k6s-report-${standard}-${sessionId.slice(0, 8)}.md"`,
+    });
+    res.end(markdown);
+  }
+
+  private buildReportJson(sessionId: string, projectRoot: string): Record<string, unknown> | null {
+    const db = this.opts.db;
+    const sm = new StateManager(db, projectRoot);
+    const session = sm.getSession(sessionId);
+    if (!session) return null;
+
+    const agents = sm.listAgents(sessionId);
+    const logger = new AuditLogger(db, sessionId);
+    const eventsDesc = logger.getEvents({ limit: 100000 });
+    const events = [...eventsDesc].reverse();
+
+    const khoregoDir = path.join(projectRoot, ".khoregos");
+    const signingKey = loadSigningKey(khoregoDir);
+    const verification = signingKey
+      ? verifyChain(signingKey, sessionId, events)
+      : { valid: false, eventsChecked: events.length, errors: [] as VerifyError[] };
+
+    const byType: Record<string, number> = {};
+    const bySeverity: Record<string, number> = {};
+    const filesModified = new Set<string>();
+    for (const event of events) {
+      byType[event.eventType] = (byType[event.eventType] ?? 0) + 1;
+      bySeverity[event.severity] = (bySeverity[event.severity] ?? 0) + 1;
+      if (event.filesAffected) {
+        try {
+          const files = JSON.parse(event.filesAffected) as string[];
+          for (const f of files) filesModified.add(f);
+        } catch { /* skip */ }
+      }
+    }
+
+    const boundaryRows = db.fetchAll(
+      "SELECT id, agent_id, file_path, violation_type, enforcement_action, timestamp FROM boundary_violations WHERE session_id = ? ORDER BY timestamp ASC",
+      [sessionId],
+    );
+    const agentNameById = new Map(agents.map((a) => [a.id, a.name]));
+    const gateRows = db.fetchAll(
+      "SELECT id, gate_id, action, details, timestamp FROM audit_events WHERE session_id = ? AND event_type = 'gate_triggered' ORDER BY sequence ASC",
+      [sessionId],
+    );
+
+    return {
+      session: {
+        id: session.id,
+        objective: session.objective,
+        operator: session.operator,
+        hostname: session.hostname,
+        git_branch: session.gitBranch,
+        git_sha: session.gitSha,
+        started_at: session.startedAt,
+        ended_at: session.endedAt,
+        duration_seconds: session.endedAt
+          ? Math.max(0, Math.floor((new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime()) / 1000))
+          : null,
+        trace_id: session.traceId,
+        k6s_version: session.k6sVersion,
+      },
+      agents: agents.map((a) => ({ name: a.name, role: a.role, state: a.state, spawned_at: a.spawnedAt })),
+      chain_integrity: {
+        result: verification.valid ? "CHAIN_INTACT" : "CHAIN_BROKEN",
+        total_events: verification.eventsChecked,
+        valid: Math.max(0, verification.eventsChecked - verification.errors.length),
+        gaps: verification.errors.filter((e) => e.type === "gap").length,
+        mismatches: verification.errors.filter((e) => e.type === "mismatch").length,
+      },
+      events_summary: { by_type: byType, by_severity: bySeverity },
+      files_modified: [...filesModified].sort((a, b) => a.localeCompare(b)),
+      boundary_violations: boundaryRows.map((row) => ({
+        id: row.id,
+        agent_name: row.agent_id ? (agentNameById.get(String(row.agent_id)) ?? null) : null,
+        file_path: row.file_path,
+        violation_type: row.violation_type,
+        enforcement_action: row.enforcement_action,
+        timestamp: row.timestamp,
+      })),
+      gate_events: gateRows.map((row) => {
+        let details: Record<string, unknown> = {};
+        if (typeof row.details === "string") {
+          try { details = JSON.parse(row.details) as Record<string, unknown>; } catch { /* skip */ }
+        }
+        return {
+          id: row.id,
+          gate_id: row.gate_id,
+          gate_name: typeof details.rule_name === "string" ? details.rule_name : null,
+          file_path: typeof details.file === "string" ? details.file : null,
+          timestamp: row.timestamp,
+        };
+      }),
+    };
   }
 
   private apiPush(req: IncomingMessage, res: ServerResponse): void {

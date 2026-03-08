@@ -74,7 +74,7 @@ describe("DashboardServer", () => {
     logger.log({ eventType: "boundary_violation", action: "strict enforcement: reverted foo.js", severity: "critical" });
     logger.stop();
 
-    server = new DashboardServer({ db, config, sessionId, port: 0, host: "127.0.0.1" });
+    server = new DashboardServer({ db, config, sessionId, port: 0, host: "127.0.0.1", projectRoot });
     port = await server.start();
   });
 
@@ -145,6 +145,44 @@ describe("DashboardServer", () => {
     expect(res.status).toBe(200);
     const data = JSON.parse(res.body);
     expect(data.entries).toBeDefined();
+  });
+
+  it("exports events as JSON via /api/export/events", async () => {
+    const res = await httpGet(`http://127.0.0.1:${port}/api/export/events?format=json`);
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(res.headers["content-disposition"]).toContain("k6s-events-");
+    const data = JSON.parse(res.body);
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("exports events as CSV via /api/export/events", async () => {
+    const res = await httpGet(`http://127.0.0.1:${port}/api/export/events?format=csv`);
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/csv");
+    expect(res.body).toContain("timestamp,sequence,session_id");
+  });
+
+  it("exports report as markdown via /api/export/report", async () => {
+    const res = await httpGet(`http://127.0.0.1:${port}/api/export/report?standard=generic&format=markdown`);
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/markdown");
+    expect(res.body).toContain("Khoregos audit report");
+  });
+
+  it("exports report as JSON via /api/export/report", async () => {
+    const res = await httpGet(`http://127.0.0.1:${port}/api/export/report?standard=generic&format=json`);
+    expect(res.status).toBe(200);
+    const data = JSON.parse(res.body);
+    expect(data.session).toBeDefined();
+    expect(data.chain_integrity).toBeDefined();
+    expect(data.events_summary).toBeDefined();
+  });
+
+  it("rejects invalid report standard", async () => {
+    const res = await httpGet(`http://127.0.0.1:${port}/api/export/report?standard=invalid`);
+    expect(res.status).toBe(400);
   });
 
   it("rejects POST /api/push without valid token", async () => {

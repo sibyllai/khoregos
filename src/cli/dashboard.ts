@@ -88,6 +88,7 @@ export function registerDashboardCommands(program: Command): void {
         sessionId,
         port,
         host,
+        projectRoot,
       });
 
       const actualPort = await dashboardServer.start();
