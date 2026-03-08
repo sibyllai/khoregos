@@ -209,11 +209,12 @@ export function extractDurationMs(data: Record<string, unknown>): number | undef
 function tryPushToDashboard(projectRoot: string, event: Record<string, unknown>): void {
   const pid = readDashboardPid(projectRoot);
   if (!pid) return;
-  // Read dashboard port from daemon state.
+  // Read dashboard port and push token from daemon state.
   const daemon = new DaemonState(path.join(projectRoot, ".khoregos"));
   const state = daemon.readState();
   const port = (state.dashboard_port as number) ?? 6100;
-  pushToDashboard(projectRoot, event, port);
+  const token = (state.dashboard_push_token as string) ?? undefined;
+  pushToDashboard(projectRoot, event, port, token);
 }
 
 function configureHookWebhooks(projectRoot: string): void {

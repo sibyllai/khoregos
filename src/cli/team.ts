@@ -2,7 +2,8 @@
  * Team management CLI commands.
  */
 
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync, closeSync, constants as fsConstants } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { execFileSync, spawn } from "node:child_process";
 import path from "node:path";
@@ -98,15 +99,30 @@ export function stopDashboardDaemon(projectRoot: string): void {
   }
 }
 
-export function startDashboardDaemon(projectRoot: string, port: number, sessionId: string): void {
+/**
+ * Generate a push token, start the dashboard as a detached process,
+ * and return the token so it can be stored in daemon state.
+ */
+export function startDashboardDaemon(projectRoot: string, port: number, sessionId: string): string {
   stopDashboardDaemon(projectRoot);
+  const pushToken = randomBytes(24).toString("hex");
   const child = spawn(
     "k6s",
     ["dashboard", "--no-open", "--session", sessionId, "--port", String(port)],
-    { detached: true, stdio: "ignore" },
+    {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, K6S_DASHBOARD_PUSH_TOKEN: pushToken },
+    },
   );
   child.unref();
-  writeFileSync(dashboardPidFile(projectRoot), `${child.pid}\n`, { mode: 0o600 });
+  // Write PID file atomically with O_CREAT|O_EXCL to prevent symlink attacks.
+  const pidPath = dashboardPidFile(projectRoot);
+  try { unlinkSync(pidPath); } catch { /* ignore ENOENT */ }
+  const fd = openSync(pidPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
+  writeSync(fd, `${child.pid}\n`);
+  closeSync(fd);
+  return pushToken;
 }
 
 const SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH = 200;
@@ -491,7 +507,9 @@ export function registerTeamCommands(program: Command): void {
       // Dashboard daemon.
       if (opts.dashboard) {
         const dashPort = config.dashboard?.port ?? 6100;
-        startDashboardDaemon(projectRoot, dashPort, session.id);
+        const pushToken = startDashboardDaemon(projectRoot, dashPort, session.id);
+        // Persist token so hooks can authenticate pushes.
+        daemon.writeState({ ...daemon.readState(), dashboard_push_token: pushToken });
         const dashUrl = `http://${config.dashboard?.host ?? "localhost"}:${dashPort}`;
         console.log(chalk.green("✓") + ` Dashboard at ${chalk.bold.cyan(dashUrl)}`);
         try {

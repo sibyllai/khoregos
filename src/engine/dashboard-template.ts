@@ -299,7 +299,7 @@ export function getDashboardHTML(sessionId: string, config: K6sConfig): string {
 
 <script>
 (function() {
-  var SESSION_ID = ${JSON.stringify(sessionId)};
+  var SESSION_ID = ${JSON.stringify(sessionId).replace(/</g, "\\u003c")};
   var currentSessionId = SESSION_ID;
   var allEvents = [];
   var startTime = Date.now();
@@ -533,7 +533,7 @@ export function getDashboardHTML(sessionId: string, config: K6sConfig): string {
   // Fetch initial data.
   function fetchInitial() {
     Promise.all([
-      fetch('/api/events?limit=500&session_id=' + encodeURIComponent(currentSessionId)),
+      fetch('/api/events?limit=500'),
       fetch('/api/cost'),
       fetch('/api/agents'),
       fetch('/api/review'),
@@ -663,8 +663,14 @@ export function getDashboardHTML(sessionId: string, config: K6sConfig): string {
   document.getElementById('exportCSV').addEventListener('click', function() {
     var rows = getFilteredEvents();
     var lines = ['sequence,timestamp,event_type,severity,agent_id,action'];
+    function csvSafe(s) {
+      s = String(s);
+      // Prevent CSV formula injection in spreadsheet applications.
+      if (/^[=+\\-@\\t\\r]/.test(s)) s = "'" + s;
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
     rows.forEach(function(r) {
-      lines.push([r.sequence, r.timestamp, r.event_type, r.severity, r.agent_id || '', '"' + (r.action || '').replace(/"/g, '""') + '"'].join(','));
+      lines.push([r.sequence, r.timestamp, r.event_type, r.severity, r.agent_id || '', csvSafe(r.action || '')].join(','));
     });
     download('k6s-events.csv', lines.join('\\n'), 'text/csv');
   });

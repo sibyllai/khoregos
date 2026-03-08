@@ -26,12 +26,12 @@ function httpGet(url: string): Promise<{ status: number; body: string; headers: 
   });
 }
 
-function httpPost(url: string, data: string): Promise<{ status: number; body: string }> {
+function httpPost(url: string, data: string, headers?: Record<string, string>): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const req = http.request(
       { hostname: parsed.hostname, port: parsed.port, path: parsed.pathname, method: "POST",
-        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } },
+        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data), ...headers } },
       (res) => {
         let body = "";
         res.on("data", (chunk: Buffer) => { body += chunk.toString(); });
@@ -132,7 +132,26 @@ describe("DashboardServer", () => {
     expect(data.items.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("accepts POST /api/push and broadcasts via SSE", async () => {
+  it("rejects POST /api/push without valid token", async () => {
+    const res = await httpPost(
+      `http://127.0.0.1:${port}/api/push`,
+      JSON.stringify({ id: "no-auth", event_type: "test", action: "no auth" }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects POST /api/push with wrong token", async () => {
+    const res = await httpPost(
+      `http://127.0.0.1:${port}/api/push`,
+      JSON.stringify({ id: "bad-auth", event_type: "test", action: "bad auth" }),
+      { Authorization: "Bearer wrong-token" },
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("accepts POST /api/push with valid token and broadcasts via SSE", async () => {
+    const authHeaders = { Authorization: `Bearer ${server.pushToken}` };
+
     // Connect SSE first.
     const sseEvents: string[] = [];
     const ssePromise = new Promise<void>((resolve) => {
@@ -151,10 +170,11 @@ describe("DashboardServer", () => {
     // Give SSE time to connect.
     await new Promise((r) => setTimeout(r, 50));
 
-    // Push an event.
+    // Push an event with valid token.
     const pushRes = await httpPost(
       `http://127.0.0.1:${port}/api/push`,
       JSON.stringify({ id: "push-test-001", event_type: "test_push", action: "push test" }),
+      authHeaders,
     );
     expect(pushRes.status).toBe(200);
 
@@ -165,16 +185,16 @@ describe("DashboardServer", () => {
   });
 
   it("deduplicates pushed events", async () => {
+    const authHeaders = { Authorization: `Bearer ${server.pushToken}` };
     const eventId = "dedup-test-001";
     const event = { id: eventId, event_type: "test_dedup", action: "dedup" };
 
     // Push the same event twice.
-    await httpPost(`http://127.0.0.1:${port}/api/push`, JSON.stringify(event));
-    await httpPost(`http://127.0.0.1:${port}/api/push`, JSON.stringify(event));
+    await httpPost(`http://127.0.0.1:${port}/api/push`, JSON.stringify(event), authHeaders);
+    await httpPost(`http://127.0.0.1:${port}/api/push`, JSON.stringify(event), authHeaders);
 
     // No crash, and the server's seen set should contain it.
-    // We can verify by checking that a third push also returns 200 (no error).
-    const res = await httpPost(`http://127.0.0.1:${port}/api/push`, JSON.stringify(event));
+    const res = await httpPost(`http://127.0.0.1:${port}/api/push`, JSON.stringify(event), authHeaders);
     expect(res.status).toBe(200);
   });
 
@@ -183,8 +203,24 @@ describe("DashboardServer", () => {
     expect(res.status).toBe(404);
   });
 
-  it("includes CORS headers", async () => {
+  it("does not include wildcard CORS headers", async () => {
     const res = await httpGet(`http://127.0.0.1:${port}/api/events`);
-    expect(res.headers["access-control-allow-origin"]).toBe("*");
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("refuses to bind to 0.0.0.0", async () => {
+    const config = K6sConfigSchema.parse({ project: { name: "test" } });
+    const dangerousServer = new DashboardServer({
+      db, config, sessionId, port: 0, host: "0.0.0.0",
+    });
+    await expect(dangerousServer.start()).rejects.toThrow("Refusing to bind");
+  });
+
+  it("refuses to bind to ::", async () => {
+    const config = K6sConfigSchema.parse({ project: { name: "test" } });
+    const dangerousServer = new DashboardServer({
+      db, config, sessionId, port: 0, host: "::",
+    });
+    await expect(dangerousServer.start()).rejects.toThrow("Refusing to bind");
   });
 });

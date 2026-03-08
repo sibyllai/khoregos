@@ -7,6 +7,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, request as httpRequest } from "node:http";
+import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Db } from "../store/db.js";
 import type { K6sConfig } from "../models/config.js";
@@ -19,6 +20,9 @@ export interface DashboardServerOptions {
   port: number;
   host: string;
 }
+
+/** Hosts that are safe to bind without explicit opt-in. */
+const SAFE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 interface SSEClient {
   res: ServerResponse;
@@ -36,7 +40,13 @@ export class DashboardServer {
   private seenEventIds: Set<string> = new Set();
   private readonly SEEN_SET_MAX = 10_000;
 
-  constructor(private opts: DashboardServerOptions) {}
+  /** Bearer token required for the /api/push endpoint. */
+  readonly pushToken: string;
+
+  constructor(private opts: DashboardServerOptions) {
+    // Use token from env (set by team.ts daemon launcher) or generate a new one.
+    this.pushToken = process.env.K6S_DASHBOARD_PUSH_TOKEN || randomBytes(24).toString("hex");
+  }
 
   get sessionId(): string {
     return this.opts.sessionId;
@@ -48,6 +58,16 @@ export class DashboardServer {
 
   async start(): Promise<number> {
     const { db, config, port, host } = this.opts;
+
+    if (!SAFE_HOSTS.has(host) && host !== "0.0.0.0" && host !== "::") {
+      // Unknown host string — allow it (could be a hostname resolving to loopback).
+    }
+    if (host === "0.0.0.0" || host === "::") {
+      throw new Error(
+        `Refusing to bind dashboard to "${host}" — this would expose the unauthenticated ` +
+          "dashboard to the network. Use --host localhost (default) or a specific interface.",
+      );
+    }
 
     this.server = createServer((req, res) => {
       this.handleRequest(req, res);
@@ -221,16 +241,9 @@ export class DashboardServer {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const pathname = url.pathname;
 
-    // CORS headers.
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
+    // No CORS headers — the dashboard is served from the same origin,
+    // so cross-origin access is intentionally denied to prevent
+    // exfiltration of audit data by malicious websites.
 
     if (pathname === "/" && req.method === "GET") {
       return this.serveHTML(res);
@@ -289,7 +302,8 @@ export class DashboardServer {
 
   private apiEvents(url: URL, res: ServerResponse): void {
     const limit = Math.min(Number(url.searchParams.get("limit") ?? "500"), 2000);
-    const sessionId = url.searchParams.get("session_id") ?? this.opts.sessionId;
+    // Always scope to the bound session — callers cannot query arbitrary sessions.
+    const sessionId = this.opts.sessionId;
 
     const rows = this.opts.db.fetchAll(
       `SELECT rowid, id, sequence, session_id, agent_id, timestamp,
@@ -389,6 +403,14 @@ export class DashboardServer {
   }
 
   private apiPush(req: IncomingMessage, res: ServerResponse): void {
+    // Require bearer token to prevent event injection from untrusted sources.
+    const auth = req.headers.authorization ?? "";
+    if (auth !== `Bearer ${this.pushToken}`) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+
     let body = "";
     req.on("data", (chunk: Buffer) => {
       body += chunk.toString();
@@ -428,19 +450,24 @@ export function pushToDashboard(
   projectRoot: string,
   event: Record<string, unknown>,
   port: number,
+  token?: string,
 ): void {
   try {
     const data = JSON.stringify(event);
+    const headers: Record<string, string | number> = {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(data),
+    };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
     const req = httpRequest(
       {
         hostname: "127.0.0.1",
         port,
         path: "/api/push",
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(data),
-        },
+        headers,
         timeout: 50,
       },
       () => {
