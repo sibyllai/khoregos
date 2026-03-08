@@ -47,6 +47,8 @@ import {
   endAgentSpan,
   recordLangfuseEvent,
 } from "../engine/langfuse.js";
+import { pushToDashboard } from "../engine/dashboard.js";
+import { readDashboardPid } from "./team.js";
 
 // Maximum bytes to read from stdin before aborting (1 MB).
 // Hook payloads are small JSON objects; anything larger is anomalous.
@@ -198,6 +200,20 @@ export function extractDurationMs(data: Record<string, unknown>): number | undef
   const duration = endMs - startMs;
   if (!Number.isFinite(duration) || duration < 0 || duration > MAX_DURATION_MS) return undefined;
   return duration;
+}
+
+/**
+ * Optimistic push to a running dashboard. Fire-and-forget.
+ * Fast-path skip if no dashboard.pid exists.
+ */
+function tryPushToDashboard(projectRoot: string, event: Record<string, unknown>): void {
+  const pid = readDashboardPid(projectRoot);
+  if (!pid) return;
+  // Read dashboard port from daemon state.
+  const daemon = new DaemonState(path.join(projectRoot, ".khoregos"));
+  const state = daemon.readState();
+  const port = (state.dashboard_port as number) ?? 6100;
+  pushToDashboard(projectRoot, event, port);
 }
 
 function configureHookWebhooks(projectRoot: string): void {
@@ -495,6 +511,18 @@ export function registerHookCommands(program: Command): void {
       });
       logger.stop();
 
+      tryPushToDashboard(projectRoot, {
+        id: event.id,
+        sequence: event.sequence,
+        session_id: sessionId,
+        agent_id: agentId,
+        timestamp: event.timestamp,
+        event_type: "tool_use",
+        action,
+        details,
+        severity,
+      });
+
       const tracer = getTracer();
       tracer.startActiveSpan(
         "tool.use",
@@ -703,6 +731,15 @@ export function registerHookCommands(program: Command): void {
         },
         agentId: agent.id,
       });
+
+      tryPushToDashboard(projectRoot, {
+        session_id: sessionId,
+        agent_id: agent.id,
+        event_type: "agent_spawn",
+        action: `agent spawned: ${agentName}`,
+        timestamp: new Date().toISOString(),
+      });
+
       const tracer = getTracer();
       tracer.startActiveSpan(
         "agent.spawn",
@@ -768,6 +805,15 @@ export function registerHookCommands(program: Command): void {
         },
       });
       logger.stop();
+
+      tryPushToDashboard(projectRoot, {
+        session_id: sessionId,
+        agent_id: agentId,
+        event_type: "agent_complete",
+        action: `agent completed: ${data.tool_name ?? "subagent"}`,
+        timestamp: new Date().toISOString(),
+      });
+
       const tracer = getTracer();
       tracer.startActiveSpan("agent.stop", (span) => {
         span.end();
@@ -814,6 +860,13 @@ export function registerHookCommands(program: Command): void {
       eventType: "session_complete",
       action: "claude code session ended",
       details: { session_id: data.session_id },
+    });
+
+    tryPushToDashboard(projectRoot, {
+      session_id: sessionId,
+      event_type: "session_complete",
+      action: "claude code session ended",
+      timestamp: new Date().toISOString(),
     });
 
     // Mark session as completed.

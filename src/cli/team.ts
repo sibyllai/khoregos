@@ -53,6 +53,62 @@ import {
 } from "../engine/langfuse.js";
 import { output, resolveJsonOption } from "./output.js";
 
+// ── Dashboard daemon helpers ────────────────────────────────────────
+
+export function dashboardPidFile(projectRoot: string): string {
+  return path.join(projectRoot, ".khoregos", "dashboard.pid");
+}
+
+export function readDashboardPid(projectRoot: string): number | null {
+  const pidPath = dashboardPidFile(projectRoot);
+  if (!existsSync(pidPath)) return null;
+  try {
+    const raw = readFileSync(pidPath, "utf-8").trim();
+    const pid = Number(raw);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDashboardPid(projectRoot: string): void {
+  const pidPath = dashboardPidFile(projectRoot);
+  try {
+    unlinkSync(pidPath);
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+}
+
+export function stopDashboardDaemon(projectRoot: string): void {
+  const pid = readDashboardPid(projectRoot);
+  if (!pid) {
+    clearDashboardPid(projectRoot);
+    return;
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (e: unknown) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH") {
+      console.error(`Warning: Failed to stop dashboard daemon (pid ${pid}): ${(e as Error).message}.`);
+    }
+  } finally {
+    clearDashboardPid(projectRoot);
+  }
+}
+
+export function startDashboardDaemon(projectRoot: string, port: number, sessionId: string): void {
+  stopDashboardDaemon(projectRoot);
+  const child = spawn(
+    "k6s",
+    ["dashboard", "--no-open", "--session", sessionId, "--port", String(port)],
+    { detached: true, stdio: "ignore" },
+  );
+  child.unref();
+  writeFileSync(dashboardPidFile(projectRoot), `${child.pid}\n`, { mode: 0o600 });
+}
+
 const SESSION_START_ACTION_OBJECTIVE_MAX_LENGTH = 200;
 
 function formatSessionStartAction(objective: string): string {
@@ -216,7 +272,8 @@ export function registerTeamCommands(program: Command): void {
     .description("Start an agent team session with governance")
     .argument("<objective>", "What the team will work on")
     .option("-r, --run", "Launch Claude Code with the objective as prompt")
-    .action(async (objective: string, opts: { run?: boolean }) => {
+    .option("-d, --dashboard", "Launch the real-time audit dashboard")
+    .action(async (objective: string, opts: { run?: boolean; dashboard?: boolean }) => {
       const projectRoot = process.cwd();
       const configFile = path.join(projectRoot, "k6s.yaml");
       const khoregoDir = path.join(projectRoot, ".khoregos");
@@ -420,11 +477,29 @@ export function registerTeamCommands(program: Command): void {
       // Atomic state file creation — prevents race if two `team start`
       // commands run concurrently (the isRunning() check above is a fast
       // path for UX; this is the actual safety net).
-      if (!daemon.createState({ session_id: session.id })) {
+      const daemonStateData: Record<string, unknown> = { session_id: session.id };
+      if (opts.dashboard) {
+        daemonStateData.dashboard_port = config.dashboard?.port ?? 6100;
+      }
+      if (!daemon.createState(daemonStateData)) {
         const raceState = daemon.readState();
         const raceSid = ((raceState.session_id as string) ?? "unknown").slice(0, 8);
         console.log(chalk.yellow(`Race detected: session ${raceSid}... was started concurrently.`));
         process.exit(1);
+      }
+
+      // Dashboard daemon.
+      if (opts.dashboard) {
+        const dashPort = config.dashboard?.port ?? 6100;
+        startDashboardDaemon(projectRoot, dashPort, session.id);
+        const dashUrl = `http://${config.dashboard?.host ?? "localhost"}:${dashPort}`;
+        console.log(chalk.green("✓") + ` Dashboard at ${chalk.bold.cyan(dashUrl)}`);
+        try {
+          const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+          execFileSync(openCmd, [dashUrl], { stdio: "ignore" });
+        } catch {
+          // Best-effort.
+        }
       }
 
       const objectiveOneline = objective.replace(/\s+/g, " ").trim();
@@ -532,6 +607,7 @@ export function registerTeamCommands(program: Command): void {
       }
       daemon.removeState();
       stopTelemetryDaemon(projectRoot);
+      stopDashboardDaemon(projectRoot);
 
       setWebhookDispatcher(null);
       await shutdownLangfuse();
