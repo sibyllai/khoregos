@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
@@ -161,9 +161,40 @@ export function registerInitCommand(program: Command): void {
         const gitignore = path.join(khoregoDir, '.gitignore');
         writeFileSync(
           gitignore,
-          '# Ignore database, daemon state, and signing key\n*.db\n*.db-*\ndaemon.*\nsigning.key\n',
+          [
+            '# Khoregos runtime gitignore',
+            '#',
+            '# The .khoregos/ directory is intentionally versioned. It signals to',
+            '# collaborators that this project uses Khoregos governance. Only runtime',
+            '# artifacts (database, signing key, daemon state, PID files) are ignored.',
+            '# To export governance data for git, use: k6s export --format git',
+            '',
+            '*.db',
+            '*.db-*',
+            'daemon.*',
+            '*.pid',
+            'signing.key',
+            '',
+          ].join('\n'),
         );
         console.log(chalk.green('✓') + ' Created .khoregos/.gitignore');
+
+        // If the project has a root .gitignore, add a note explaining
+        // that .khoregos/ should remain versioned (not ignored).
+        const projectGitignore = path.join(projectRoot, '.gitignore');
+        if (existsSync(projectGitignore)) {
+          const content = readFileSync(projectGitignore, 'utf-8');
+          if (!content.includes('.khoregos')) {
+            const note = [
+              '',
+              '# Khoregos: .khoregos/ is versioned intentionally — do not ignore it.',
+              '# Runtime artifacts inside it are excluded by .khoregos/.gitignore.',
+              '',
+            ].join('\n');
+            writeFileSync(projectGitignore, content.trimEnd() + '\n' + note);
+            console.log(chalk.green('✓') + ' Added .khoregos note to .gitignore');
+          }
+        }
 
         const pluginDetected = isPluginInstalled(projectRoot);
         console.log();
