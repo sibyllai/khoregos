@@ -32,7 +32,7 @@ Khoregos closes this gap.
 **Install the CLI:**
 
 ```bash
-npm install -g khoregos
+npm install -g @sibyllai/khoregos
 ```
 
 **Install the Claude Code plugin (recommended):**
