@@ -6,6 +6,9 @@
   "bin": {
     "k6s": "bin/k6s.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "bin/",
     "dist/",

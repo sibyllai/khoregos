@@ -35,19 +35,6 @@ Khoregos closes this gap.
 npm install -g @sibyllai/khoregos
 ```
 
-**Install the Claude Code plugin (recommended):**
-
-The plugin automates hook and MCP server registration, adds a governance skill, and provides slash commands. The CLI above must be on your PATH — the plugin calls it under the hood.
-
-Inside a Claude Code session:
-
-```text
-/plugin marketplace add sibyllai/khoregos
-/plugin install khoregos@sibyllai
-```
-
-Without the plugin, `k6s team start` falls back to direct registration in `.claude/settings.json`.
-
 **Initialize in your project:**
 
 ```bash
@@ -164,7 +151,6 @@ The `sensitive_needs_review` warning on seq 8 fired automatically because the ag
 - **External timestamping.** RFC 3161 anchors for non-repudiation.
 - **Webhook notifications.** HMAC-signed HTTP callbacks with retry backoff.
 - **Resource limits.** Per-agent tool call caps with advisory enforcement.
-- **Claude Code plugin.** Native plugin with hooks, MCP server, governance skill, and slash commands. Two-command install via marketplace.
 - **Configuration presets.** Six named presets (`minimal`, `security-strict`, `compliance-soc2`, `compliance-iso27001`, `monorepo`, `microservices`) generate a tailored `k6s.yaml` in one command.
 - **Plugin system.** ESM plugins with lifecycle and event hooks for custom governance logic.
 - **Token usage tracking.** Automatic capture of input/output/cache tokens and estimated costs from Claude Code transcript data. Per-session and per-agent cost breakdowns via `k6s cost show`.
@@ -175,13 +161,14 @@ The `sensitive_needs_review` warning on seq 8 fired automatically because the ag
 
 ## How it works (without patching Claude Code)
 
-Khoregos uses three integration surfaces, all public and stable:
+Khoregos uses two integration surfaces, both public and stable:
 
 1. **MCP server** — Agents connect via the Model Context Protocol and call governance tools voluntarily. This is the cooperative channel.
 2. **Claude Code hooks** — Claude Code's lifecycle hooks (`post-tool-use`, `subagent-start/stop`, `stop`) capture every action regardless of agent compliance. This is the safety net.
-3. **Claude Code plugin** — A native plugin packages hooks, MCP server, governance skill, and slash commands so installation is two commands inside Claude Code. When the plugin is installed, `k6s team start` skips redundant registration and only injects session-specific context.
 
-When the plugin is not installed, `k6s team start` falls back to direct filesystem registration of hooks and MCP server into `.claude/settings.json`. Governance does not depend on agent cooperation. Even if an agent ignores MCP tools entirely, the hook-based audit trail captures everything.
+`k6s team start` registers hooks and the MCP server in `.claude/settings.json`. Governance does not depend on agent cooperation. Even if an agent ignores MCP tools entirely, the hook-based audit trail captures everything.
+
+> **Coming soon: Claude Code plugin.** A native plugin is pending review in the Claude Code marketplace. Once approved, it will package hooks, MCP server, governance skill, and slash commands into a two-command install — replacing the manual registration step. Until then, `k6s team start` handles registration automatically.
 
 ## Architecture
 
