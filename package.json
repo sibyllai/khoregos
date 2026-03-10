@@ -16,7 +16,7 @@
     ".claude-plugin/"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "prepublishOnly": "npm run build",
