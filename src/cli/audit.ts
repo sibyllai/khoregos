@@ -1089,7 +1089,7 @@ export function registerAuditCommands(program: Command): void {
     .command("transcript")
     .description("View stored conversation transcript entries")
     .option("-s, --session <id>", "Session ID or 'latest'", "latest")
-    .option("-r, --role <role>", "Filter by role (user, assistant)")
+    .option("-r, --role <role>", "Filter by role (operator, tool_result, system, assistant)")
     .option("-n, --limit <number>", "Maximum entries to show", "50")
     .option("--offset <number>", "Skip first N entries", "0")
     .option("--json", "Output in JSON format")
@@ -1170,7 +1170,7 @@ export function registerAuditCommands(program: Command): void {
 
         const table = new Table({
           head: ["Seq", "Time", "Role", "Model", "Tokens", "Content Preview"],
-          colWidths: [6, 10, 10, 20, 12, 50],
+          colWidths: [6, 10, 14, 20, 12, 46],
           wordWrap: true,
         });
 
@@ -1181,7 +1181,13 @@ export function registerAuditCommands(program: Command): void {
           const contentPreview = entry.content
             ? entry.content.slice(0, 80).replace(/\n/g, " ")
             : chalk.dim("(usage-only)");
-          const roleColor = entry.role === "user" ? chalk.cyan : chalk.green;
+          const roleColors: Record<string, (s: string) => string> = {
+            operator: chalk.cyan,
+            tool_result: chalk.yellow,
+            system: chalk.dim,
+            assistant: chalk.green,
+          };
+          const roleColor = roleColors[entry.role ?? ""] ?? chalk.white;
           table.push([
             String(entry.sequence),
             new Date(entry.timestamp).toTimeString().slice(0, 8),

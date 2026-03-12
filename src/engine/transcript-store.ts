@@ -30,6 +30,53 @@ export interface StoredTranscriptEntry {
 }
 
 /**
+ * Classify the source of a "user" role message.
+ *
+ * Claude Code transcript entries with role "user" are overloaded:
+ * - Genuine operator input (human typed a prompt)
+ * - Tool results (bash output, file reads — things Claude requested)
+ * - System injections (hook feedback, context, system-reminders)
+ *
+ * This function inspects the message content to distinguish these,
+ * replacing the misleading "user" label with a meaningful source.
+ */
+function classifyUserRole(msg: Record<string, unknown>): string {
+  const content = msg.content;
+
+  if (Array.isArray(content)) {
+    let hasToolResult = false;
+    for (const block of content) {
+      if (typeof block === "object" && block !== null) {
+        const b = block as Record<string, unknown>;
+        if (b.type === "tool_result") {
+          hasToolResult = true;
+        }
+      }
+    }
+    if (hasToolResult) return "tool_result";
+
+    // Check for system-reminder tags in text blocks.
+    for (const block of content) {
+      if (typeof block === "string" && block.includes("<system-reminder>")) {
+        return "system";
+      }
+      if (typeof block === "object" && block !== null) {
+        const b = block as Record<string, unknown>;
+        if (b.type === "text" && typeof b.text === "string" && b.text.includes("<system-reminder>")) {
+          return "system";
+        }
+      }
+    }
+  }
+
+  if (typeof content === "string" && content.includes("<system-reminder>")) {
+    return "system";
+  }
+
+  return "operator";
+}
+
+/**
  * Parse a raw JSONL line into content suitable for storage.
  */
 function extractContent(
@@ -39,7 +86,8 @@ function extractContent(
   const msg = raw.message as Record<string, unknown> | undefined;
   if (!msg) return { content: null, role: null, redacted: false };
 
-  const role = (msg.role as string) ?? null;
+  const rawRole = (msg.role as string) ?? null;
+  const role = rawRole === "user" ? classifyUserRole(msg) : rawRole;
 
   // For usage-only mode, skip content entirely.
   if (config.store === "usage-only") {

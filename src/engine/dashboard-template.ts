@@ -235,7 +235,9 @@ export function getDashboardHTML(sessionId: string, config: K6sConfig): string {
     .transcript-role {
       font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
     }
-    .transcript-role.user { color: var(--blue); }
+    .transcript-role.operator { color: var(--blue); }
+    .transcript-role.tool_result { color: var(--yellow); }
+    .transcript-role.system { color: var(--text-dim); }
     .transcript-role.assistant { color: var(--green); }
     .transcript-content {
       font-family: 'IBM Plex Mono', monospace; font-size: 12px;

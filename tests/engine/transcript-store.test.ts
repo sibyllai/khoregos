@@ -294,12 +294,94 @@ describe("ingestTranscript", () => {
   });
 });
 
+describe("role classification", () => {
+  it("classifies plain text user messages as 'operator'", () => {
+    const sess = state.createSession({ objective: "classify operator" });
+    const agent = state.registerAgent({ sessionId: sess.id, name: "primary" });
+
+    const fp = writeTranscript([
+      { type: "user", uuid: "c1", timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content: "build a REST API" } },
+    ], "classify-operator.jsonl");
+
+    ingestTranscript({ db, sessionId: sess.id, agentId: agent.id, transcriptPath: fp, byteOffset: 0, config: fullConfig() });
+
+    const entries = queryTranscript(db, sess.id);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].role).toBe("operator");
+  });
+
+  it("classifies tool_result content blocks as 'tool_result'", () => {
+    const sess = state.createSession({ objective: "classify tool_result" });
+    const agent = state.registerAgent({ sessionId: sess.id, name: "primary" });
+
+    const fp = writeTranscript([
+      {
+        type: "user", uuid: "c2", timestamp: "2026-01-01T00:00:01Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_abc", content: "file contents here" }],
+        },
+      },
+    ], "classify-tool-result.jsonl");
+
+    ingestTranscript({ db, sessionId: sess.id, agentId: agent.id, transcriptPath: fp, byteOffset: 0, config: fullConfig() });
+
+    const entries = queryTranscript(db, sess.id);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].role).toBe("tool_result");
+  });
+
+  it("classifies system-reminder content as 'system'", () => {
+    const sess = state.createSession({ objective: "classify system" });
+    const agent = state.registerAgent({ sessionId: sess.id, name: "primary" });
+
+    const fp = writeTranscript([
+      {
+        type: "user", uuid: "c3", timestamp: "2026-01-01T00:00:02Z",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "<system-reminder>hook feedback here</system-reminder>" }],
+        },
+      },
+    ], "classify-system.jsonl");
+
+    ingestTranscript({ db, sessionId: sess.id, agentId: agent.id, transcriptPath: fp, byteOffset: 0, config: fullConfig() });
+
+    const entries = queryTranscript(db, sess.id);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].role).toBe("system");
+  });
+
+  it("preserves 'assistant' role unchanged", () => {
+    const sess = state.createSession({ objective: "classify assistant" });
+    const agent = state.registerAgent({ sessionId: sess.id, name: "primary" });
+
+    const fp = writeTranscript([
+      {
+        type: "assistant", uuid: "c4", timestamp: "2026-01-01T00:00:03Z",
+        message: {
+          model: "claude-opus-4-6", role: "assistant",
+          content: [{ type: "text", text: "response" }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      },
+    ], "classify-assistant.jsonl");
+
+    ingestTranscript({ db, sessionId: sess.id, agentId: agent.id, transcriptPath: fp, byteOffset: 0, config: fullConfig() });
+
+    const entries = queryTranscript(db, sess.id);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].role).toBe("assistant");
+  });
+});
+
 describe("queryTranscript", () => {
   it("filters by role", () => {
     // Uses entries from the 'full.jsonl' test above.
-    const userEntries = queryTranscript(db, sessionId, { role: "user" });
-    for (const e of userEntries) {
-      expect(e.role).toBe("user");
+    // Plain text user messages are now classified as 'operator'.
+    const operatorEntries = queryTranscript(db, sessionId, { role: "operator" });
+    for (const e of operatorEntries) {
+      expect(e.role).toBe("operator");
     }
   });
 
