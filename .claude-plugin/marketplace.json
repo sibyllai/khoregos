@@ -7,7 +7,7 @@
     {
       "name": "khoregos",
       "source": "plugin",
-      "version": "1.6.2",
+      "version": "1.7.0",
       "description": "Enterprise governance for Claude Code Agent Teams. Audit trails, boundaries, compliance.",
       "license": "MIT",
       "homepage": "https://github.com/sibyllai/khoregos",
