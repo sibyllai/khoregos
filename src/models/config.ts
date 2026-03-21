@@ -15,11 +15,14 @@ export const SessionConfigSchema = z.object({
   context_retention_days: z.number().default(90),
   audit_retention_days: z.number().default(365),
   session_retention_days: z.number().default(365),
-  // When true (default), ending a Claude Code session automatically
-  // completes the k6s session and removes the daemon state file.
-  // Set to false to keep the k6s session alive across multiple
-  // Claude Code invocations without requiring an explicit resume.
-  end_on_claude_exit: z.boolean().default(true),
+  // When true, ending a Claude Code session automatically completes
+  // the k6s session and removes the daemon state file.
+  // When false (default), the k6s session stays alive across multiple
+  // Claude Code invocations — only `k6s team stop` ends it.
+  end_on_claude_exit: z.boolean().default(false),
+  // Hours after which a persistent session is considered stale.
+  // Hooks will warn but still record events. 0 disables the check.
+  stale_timeout_hours: z.number().nonnegative().default(24),
 });
 
 export const BoundaryConfigSchema = z.object({

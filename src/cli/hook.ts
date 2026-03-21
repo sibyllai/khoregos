@@ -9,10 +9,12 @@
  * and writes an audit event to SQLite synchronously.
  */
 
-import { existsSync, readdirSync, readSync } from "node:fs";
+import { existsSync, readdirSync, readSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { hostname } from "node:os";
+import { execFileSync } from "node:child_process";
 import { Command } from "commander";
-import { loadConfigOrDefault } from "../models/config.js";
+import { loadConfigOrDefault, sanitizeConfigForStorage } from "../models/config.js";
 import { DaemonState } from "../daemon/manager.js";
 import { AuditLogger, setWebhookDispatcher } from "../engine/audit.js";
 import { BoundaryEnforcer, revertFile } from "../engine/boundaries.js";
@@ -89,12 +91,16 @@ function readHookInput(): Record<string, unknown> {
  * cwd = workspace root (e.g. repo root) while the active session lives in a
  * subdirectory (e.g. prototypes/13). We look in cwd, then ancestors, then
  * immediate children so that hooks find .khoregos and k6s.yaml in the right place.
+ *
+ * Two-pass strategy:
+ * 1. Look for an active daemon.state (existing session).
+ * 2. If none found, look for k6s.yaml (initialized project) and auto-create a session.
  */
 function resolveHookProjectRoot(): string | null {
   let dir = process.cwd();
   const seen = new Set<string>();
 
-  // Check cwd and ancestors.
+  // Pass 1: Check cwd and ancestors for active daemon.
   while (dir && !seen.has(dir)) {
     seen.add(dir);
     const state = new DaemonState(path.join(dir, ".khoregos"));
@@ -104,7 +110,7 @@ function resolveHookProjectRoot(): string | null {
     dir = parent;
   }
 
-  // One level of children (e.g. repo root -> prototypes/13).
+  // Pass 1b: One level of children (e.g. repo root -> prototypes/13).
   const cwd = process.cwd();
   try {
     const entries = readdirSync(cwd, { withFileTypes: true });
@@ -119,13 +125,250 @@ function resolveHookProjectRoot(): string | null {
     // Ignore readdir errors (e.g. permission).
   }
 
+  // Pass 2: No active session found. Look for initialized projects (k6s.yaml)
+  // where we can auto-create a session. Check cwd and ancestors only.
+  dir = cwd;
+  const seen2 = new Set<string>();
+  while (dir && !seen2.has(dir)) {
+    seen2.add(dir);
+    if (existsSync(path.join(dir, "k6s.yaml"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
   return null;
 }
 
 function getSessionId(projectRoot: string): string | null {
-  const state = new DaemonState(path.join(projectRoot, ".khoregos"));
-  if (!state.isRunning()) return null;
-  return (state.readState().session_id as string) ?? null;
+  const daemon = new DaemonState(path.join(projectRoot, ".khoregos"));
+  if (daemon.isRunning()) {
+    const sessionId = (daemon.readState().session_id as string) ?? null;
+    if (sessionId) checkStaleness(projectRoot, sessionId);
+    return sessionId;
+  }
+  // No active daemon.state — attempt auto-session creation.
+  return autoCreateSession(projectRoot);
+}
+
+/**
+ * Emit a stderr warning if the current session exceeds the stale timeout.
+ * Warnings are rate-limited: only once per 10 minutes via a flag in daemon.state.
+ *
+ * Note: concurrent hooks may both emit a warning in the same window (benign
+ * TOCTOU on the stale_warned_at flag). This is acceptable — a duplicate
+ * warning is harmless compared to the cost of file locking.
+ *
+ * Wrapped in try/catch to never block hook execution on staleness check failure.
+ */
+function checkStaleness(projectRoot: string, sessionId: string): void {
+  try {
+    const configPath = path.join(projectRoot, "k6s.yaml");
+    if (!existsSync(configPath)) return;
+    const config = loadConfigOrDefault(configPath, "project");
+    const staleHours = config.session.stale_timeout_hours ?? 24;
+    if (staleHours === 0) return;
+
+    const khoregoDir = path.join(projectRoot, ".khoregos");
+    const daemon = new DaemonState(khoregoDir);
+    const state = daemon.readState();
+    const lastWarning = state.stale_warned_at as number | undefined;
+    if (lastWarning && Date.now() - lastWarning < 600_000) return; // 10 min cooldown
+
+    const db = new Db(path.join(khoregoDir, "k6s.db"));
+    db.connect();
+    try {
+      const sm = new StateManager(db, projectRoot);
+      const session = sm.getSession(sessionId);
+      if (!session?.startedAt) return;
+      const ageMs = Date.now() - new Date(session.startedAt).getTime();
+      if (!Number.isFinite(ageMs)) return;
+      const ageHours = ageMs / (1000 * 60 * 60);
+      if (ageHours <= staleHours) return;
+
+      process.stderr.write(
+        `[k6s] Warning: session ${sessionId.slice(0, 8)}... is ${Math.round(ageHours)}h old. Run \`k6s team stop\` then \`k6s team start\` to start fresh.\n`,
+      );
+      daemon.writeState({ ...state, stale_warned_at: Date.now() });
+    } finally {
+      db.close();
+    }
+  } catch {
+    // Staleness check is best-effort. Never block hook execution.
+  }
+}
+
+/**
+ * Get git branch name for auto-session objective context.
+ */
+function getGitBranch(projectRoot: string): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function getGitSha(projectRoot: string): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function getGitDirty(projectRoot: string): boolean {
+  try {
+    const status = execFileSync("git", ["status", "--porcelain"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    return status.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Auto-create a k6s session when hooks fire without an active daemon.
+ * This is the self-healing path: hooks are registered but the session
+ * ended (or was never started). We create a lightweight session so that
+ * audit events are never lost.
+ *
+ * Uses atomic daemon.state creation (O_EXCL) to prevent races if
+ * multiple hooks fire concurrently.
+ */
+function autoCreateSession(projectRoot: string): string | null {
+  const configPath = path.join(projectRoot, "k6s.yaml");
+  if (!existsSync(configPath)) return null;
+
+  const khoregoDir = path.join(projectRoot, ".khoregos");
+  mkdirSync(khoregoDir, { recursive: true, mode: 0o700 });
+
+  const config = loadConfigOrDefault(configPath, "project");
+
+  const db = new Db(path.join(khoregoDir, "k6s.db"));
+  db.connect();
+  try {
+    const sm = new StateManager(db, projectRoot);
+
+    // Check for a resumable session (active, created, or paused).
+    const existing = sm.getResumableSession();
+    if (existing) {
+      // Check for staleness before resuming.
+      const staleHours = config.session.stale_timeout_hours ?? 24;
+      if (staleHours > 0) {
+        const sessionAgeMs = Date.now() - new Date(existing.startedAt).getTime();
+        const sessionAgeHours = sessionAgeMs / (1000 * 60 * 60);
+        if (sessionAgeHours > staleHours) {
+          const warnKey = loadSigningKey(khoregoDir);
+          const warnLogger = new AuditLogger(db, existing.id, existing.traceId, warnKey);
+          warnLogger.start();
+          warnLogger.log({
+            eventType: "log",
+            action: `stale session warning: session is ${Math.round(sessionAgeHours)}h old (threshold: ${staleHours}h)`,
+            details: {
+              stale: true,
+              age_hours: Math.round(sessionAgeHours),
+              threshold_hours: staleHours,
+            },
+            severity: "warning",
+          });
+          warnLogger.stop();
+          // Log to stderr so the user sees it in their terminal.
+          process.stderr.write(
+            `[k6s] Warning: session ${existing.id.slice(0, 8)}... is ${Math.round(sessionAgeHours)}h old. Run \`k6s team stop\` then \`k6s team start\` to start fresh.\n`,
+          );
+        }
+      }
+
+      // Re-activate paused sessions.
+      if (existing.state === "paused") {
+        sm.markSessionActive(existing.id);
+
+        const resumeKey = loadSigningKey(khoregoDir);
+        const resumeLogger = new AuditLogger(db, existing.id, existing.traceId, resumeKey);
+        resumeLogger.start();
+        resumeLogger.log({
+          eventType: "session_resume",
+          action: "session resumed by hook (new Claude Code invocation)",
+          details: { auto_resumed: true, trigger: "hook_self_healing" },
+          severity: "info",
+        });
+        resumeLogger.stop();
+      }
+
+      const daemon = new DaemonState(khoregoDir);
+      // Atomic create — if another hook already recreated it, use theirs.
+      if (daemon.createState({ session_id: existing.id, auto_created: true })) {
+        return existing.id;
+      }
+      // Lost race — another hook created daemon.state. Read their session.
+      return (daemon.readState().session_id as string) ?? null;
+    }
+
+    // Look at the previous session for context.
+    const previous = sm.getLatestSession();
+    const branch = getGitBranch(projectRoot);
+    const objective = previous
+      ? `continuation of: ${previous.objective}`
+      : branch
+        ? `auto-session on ${branch}`
+        : "auto-session (no explicit objective)";
+
+    const session = sm.createSession({
+      objective,
+      configSnapshot: JSON.stringify(sanitizeConfigForStorage(config)),
+      parentSessionId: previous?.id ?? null,
+    });
+    session.operator = process.env.USER ?? null;
+    session.hostname = hostname();
+    session.gitBranch = branch;
+    session.gitSha = getGitSha(projectRoot);
+    session.gitDirty = getGitDirty(projectRoot);
+    sm.updateSession(session);
+    sm.markSessionActive(session.id);
+
+    // Log the auto-creation event.
+    const signingKey = loadSigningKey(khoregoDir);
+    const logger = new AuditLogger(db, session.id, session.traceId, signingKey);
+    logger.start();
+    logger.log({
+      eventType: "session_start",
+      action: "auto-created session (hooks fired without active session)",
+      details: {
+        auto_created: true,
+        parent_session_id: previous?.id ?? null,
+        trigger: "hook_self_healing",
+      },
+      severity: "warning",
+    });
+    logger.stop();
+
+    // Atomic daemon state creation.
+    const daemon = new DaemonState(khoregoDir);
+    if (daemon.createState({ session_id: session.id, auto_created: true })) {
+      return session.id;
+    }
+
+    // Lost the race — another hook created a session concurrently.
+    // Our session is orphaned but harmless (will show as a short session).
+    // Use the winning session.
+    return (daemon.readState().session_id as string) ?? session.id;
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
 }
 
 function truncate(obj: unknown, maxLen = 2000): unknown {
@@ -845,14 +1088,32 @@ export function registerHookCommands(program: Command): void {
     const configPath = path.join(projectRoot, "k6s.yaml");
     const config = loadConfigOrDefault(configPath, "project");
     if (!config.session.end_on_claude_exit) {
+      // Persistent session mode: log a pause event, keep daemon.state alive.
       logEvent({
         projectRoot,
         sessionId,
-        eventType: "session_complete",
-        action: "claude code session ended (k6s session kept alive)",
+        eventType: "session_pause",
+        action: "claude code session ended (k6s session persists)",
         details: { session_id: data.session_id, end_on_claude_exit: false },
         severity: "info",
       });
+
+      tryPushToDashboard(projectRoot, {
+        session_id: sessionId,
+        event_type: "session_pause",
+        action: "claude code session ended (k6s session persists)",
+        timestamp: new Date().toISOString(),
+      });
+
+      // Mark session as paused (not completed) so getActiveSession still finds it.
+      const pauseDb = new Db(path.join(projectRoot, ".khoregos", "k6s.db"));
+      pauseDb.connect();
+      try {
+        const pauseSm = new StateManager(pauseDb, projectRoot);
+        pauseSm.markSessionPaused(sessionId);
+      } finally {
+        pauseDb.close();
+      }
       return;
     }
 
