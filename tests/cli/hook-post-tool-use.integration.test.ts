@@ -24,6 +24,7 @@ const loadConfigOrDefaultMock = vi.fn(() => ({
     },
   ],
   gates: [],
+  session: { end_on_claude_exit: false, stale_timeout_hours: 24 },
   observability: { webhooks: [] },
 }));
 const classifySeverityMock = vi.fn(() => "warning");
@@ -61,6 +62,7 @@ vi.mock("../../src/daemon/manager.js", () => {
     readState(): Record<string, unknown> {
       return { session_id: "session-1" };
     }
+    writeState(_state: Record<string, unknown>): void {}
   }
   return { DaemonState: MockDaemonState };
 });
@@ -265,6 +267,7 @@ describe("hook post-tool-use strict enforcement", () => {
         },
       ],
       gates: [],
+      session: { end_on_claude_exit: false, stale_timeout_hours: 24 },
       observability: { webhooks: [] },
     }));
     const hookPayload = JSON.stringify({

@@ -80,6 +80,18 @@ export class StateManager {
     return row ? sessionFromDbRow(row) : null;
   }
 
+  /**
+   * Find the most recent session that is still resumable (active, created, or
+   * paused). Used by auto-session creation to reuse a persistent session that
+   * was paused when Claude exited.
+   */
+  getResumableSession(): Session | null {
+    const row = this.db.fetchOne(
+      "SELECT * FROM sessions WHERE state IN ('created', 'active', 'paused') ORDER BY started_at DESC LIMIT 1",
+    );
+    return row ? sessionFromDbRow(row) : null;
+  }
+
   listSessions(opts?: {
     limit?: number;
     offset?: number;
