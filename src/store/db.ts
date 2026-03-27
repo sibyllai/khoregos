@@ -107,7 +107,27 @@ export class Db {
     mkdirSync(dir, { recursive: true });
     chmodSync(dir, 0o700);
 
-    this._db = new Database(this.path);
+    try {
+      this._db = new Database(this.path);
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (code === "ERR_DLOPEN_FAILED" || msg.includes("NODE_MODULE_VERSION")) {
+        const hint = [
+          "",
+          "better-sqlite3 was compiled for a different Node.js version.",
+          "Run `k6s doctor` for diagnostics and fix instructions.",
+          "",
+          "Quick fix:  npm rebuild better-sqlite3  (inside the k6s install directory)",
+          "         or npm install -g @sibyllai/khoregos",
+          "",
+        ].join("\n");
+        const wrapped = new Error(hint);
+        wrapped.cause = err;
+        throw wrapped;
+      }
+      throw err;
+    }
     chmodSync(this.path, 0o600);
 
     this._db.pragma("journal_mode = WAL");
