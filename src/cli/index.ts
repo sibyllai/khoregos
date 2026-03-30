@@ -36,6 +36,7 @@ import { registerExportCommand } from './export.js';
 import { registerCostCommands } from './cost.js';
 import { registerInitCommand } from './init.js';
 import { registerDashboardCommands } from './dashboard.js';
+import { registerDoctorCommand } from './doctor.js';
 import { output, outputError, resolveJsonOption } from './output.js';
 import { VERSION } from '../version.js';
 
@@ -76,6 +77,7 @@ registerExportCommand(program);
 registerCostCommands(program);
 registerInitCommand(program);
 registerDashboardCommands(program);
+registerDoctorCommand(program);
 
 // telemetry smoke
 program

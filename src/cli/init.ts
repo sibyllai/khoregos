@@ -7,6 +7,7 @@ import { isPluginInstalled } from '../daemon/manager.js';
 import { generateSigningKey } from '../engine/signing.js';
 import { generateDefaultConfig } from '../models/config.js';
 import { getPreset, listPresets, type PresetMeta } from '../presets/index.js';
+import { runAllChecks, printCheckResults } from '../engine/doctor.js';
 import { output, outputError, resolveJsonOption } from './output.js';
 
 const PRESET_REFERENCE_URL =
@@ -215,6 +216,21 @@ export function registerInitCommand(program: Command): void {
           console.log();
           console.log(
             'Or skip plugin install and continue with direct registration fallback.',
+          );
+        }
+
+        // Run doctor checks to catch native module issues early.
+        console.log();
+        console.log(chalk.bold('Running environment checks...'));
+        const checks = runAllChecks();
+        const healthy = printCheckResults(checks);
+        if (!healthy) {
+          console.log();
+          console.log(
+            chalk.yellow('⚠ Environment issues detected.') +
+              ' Run ' +
+              chalk.bold('k6s doctor') +
+              ' for details.',
           );
         }
 
