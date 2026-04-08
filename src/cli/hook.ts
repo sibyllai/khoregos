@@ -9,7 +9,15 @@
  * and writes an audit event to SQLite synchronously.
  */
 
-import { existsSync, readdirSync, readSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import path from "node:path";
 import { hostname } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -521,6 +529,80 @@ function logEvent(opts: {
 }
 
 /**
+ * Best-effort self-repair for stale Node version paths in `.claude/settings.json`.
+ *
+ * Scenario: a user installed @sibyllai/khoregos under one Node version (e.g.
+ * v21 via nvm), then upgraded Node (e.g. to v22). The hook commands in
+ * `.claude/settings.json` still reference the v21 install path, but Claude
+ * Code now runs them under v22, causing better-sqlite3 to fail with an ABI
+ * mismatch.
+ *
+ * This function:
+ *  1. Inspects the failing k6s.js script path (process.argv[1])
+ *  2. Detects an nvm-style version segment (`/versions/node/v21.7.1/`)
+ *  3. Computes the "current" path by substituting `process.versions.node`
+ *  4. Verifies the new path exists on disk (k6s is installed under current Node)
+ *  5. Walks up from cwd to find `.claude/settings.json`
+ *  6. Performs a string replacement on the version segment and writes the file
+ *
+ * All operations are wrapped in try/catch — failure is silently swallowed and
+ * the original ABI hint is still printed. The next hook invocation will use
+ * the rewritten path.
+ *
+ * Returns a description of what was repaired, or null if no repair was made.
+ */
+function attemptSettingsSelfRepair(): string | null {
+  try {
+    const broken = process.argv[1];
+    if (!broken) return null;
+
+    // Match nvm-style paths: /versions/node/vX.Y.Z/
+    const nvmRe = /\/versions\/node\/(v[\d.]+)\//;
+    const match = broken.match(nvmRe);
+    if (!match) return null;
+
+    const oldVer = match[1];
+    const newVer = `v${process.versions.node}`;
+    if (oldVer === newVer) return null;
+
+    const fixedScript = broken.replace(nvmRe, `/versions/node/${newVer}/`);
+    if (!existsSync(fixedScript)) return null;
+
+    // Walk up from cwd to find .claude/settings.json
+    let dir = process.cwd();
+    let settingsPath: string | null = null;
+    const seen = new Set<string>();
+    while (!seen.has(dir)) {
+      seen.add(dir);
+      const candidate = path.join(dir, ".claude", "settings.json");
+      if (existsSync(candidate)) {
+        settingsPath = candidate;
+        break;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    if (!settingsPath) return null;
+
+    const content = readFileSync(settingsPath, "utf-8");
+    // Conservative replacement: only the version segment within nvm-style paths.
+    const oldSegment = `/versions/node/${oldVer}/`;
+    const newSegment = `/versions/node/${newVer}/`;
+    if (!content.includes(oldSegment)) return null;
+
+    const fixed = content.split(oldSegment).join(newSegment);
+    if (fixed === content) return null;
+
+    writeFileSync(settingsPath, fixed, { mode: 0o600 });
+    chmodSync(settingsPath, 0o600);
+    return `${settingsPath} (${oldVer} → ${newVer})`;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Wrap a hook action to catch all errors and exit non-blocking.
  *
  * Hooks must NEVER bubble exceptions back to Claude Code — a "Stop hook
@@ -530,6 +612,8 @@ function logEvent(opts: {
  *
  * Special-cases native module ABI mismatches (the most common failure
  * mode after a Node version change) with a targeted fix instruction.
+ * Also attempts to self-repair stale .claude/settings.json paths when
+ * the broken script path matches an nvm version directory.
  */
 function safeHookAction(
   name: string,
@@ -556,6 +640,13 @@ function safeHookAction(
             `[k6s ${name}] Diagnose:   k6s doctor\n` +
             `[k6s ${name}] Audit logging is disabled until this is resolved.\n`,
         );
+        const repaired = attemptSettingsSelfRepair();
+        if (repaired) {
+          process.stderr.write(
+            `[k6s ${name}] Self-repair: rewrote ${repaired}\n` +
+              `[k6s ${name}] Restart Claude Code (or the next hook will use the corrected path).\n`,
+          );
+        }
       } else {
         process.stderr.write(`[k6s ${name}] hook failed: ${msg}\n`);
       }
@@ -585,6 +676,12 @@ export function registerHookCommands(program: Command): void {
       process.stderr.write(
         "[k6s hook] Native module ABI mismatch — run `npm rebuild -g better-sqlite3` or `k6s doctor`.\n",
       );
+      const repaired = attemptSettingsSelfRepair();
+      if (repaired) {
+        process.stderr.write(
+          `[k6s hook] Self-repair: rewrote ${repaired}. Restart Claude Code.\n`,
+        );
+      }
     } else {
       process.stderr.write(`[k6s hook] uncaught: ${msg}\n`);
     }
