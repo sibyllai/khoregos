@@ -520,17 +520,87 @@ function logEvent(opts: {
   }
 }
 
+/**
+ * Wrap a hook action to catch all errors and exit non-blocking.
+ *
+ * Hooks must NEVER bubble exceptions back to Claude Code — a "Stop hook
+ * error" interrupts the user's workflow and provides no actionable
+ * information. We catch everything, print a clear remediation hint to
+ * stderr, and exit 0 so Claude continues unimpeded.
+ *
+ * Special-cases native module ABI mismatches (the most common failure
+ * mode after a Node version change) with a targeted fix instruction.
+ */
+function safeHookAction(
+  name: string,
+  fn: () => Promise<void> | void,
+): () => Promise<void> {
+  return async (): Promise<void> => {
+    try {
+      await fn();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const code = (err as { code?: string }).code;
+      const isNativeModule =
+        code === "ERR_DLOPEN_FAILED" ||
+        msg.includes("NODE_MODULE_VERSION") ||
+        msg.includes("better-sqlite3 was compiled") ||
+        msg.includes("was compiled against a different Node");
+
+      if (isNativeModule) {
+        process.stderr.write(
+          `[k6s ${name}] Native module ABI mismatch detected.\n` +
+            `[k6s ${name}] better-sqlite3 was built against a different Node.js version.\n` +
+            `[k6s ${name}] Quick fix:  npm rebuild -g better-sqlite3\n` +
+            `[k6s ${name}]         or  npm install -g @sibyllai/khoregos\n` +
+            `[k6s ${name}] Diagnose:   k6s doctor\n` +
+            `[k6s ${name}] Audit logging is disabled until this is resolved.\n`,
+        );
+      } else {
+        process.stderr.write(`[k6s ${name}] hook failed: ${msg}\n`);
+      }
+      // Exit 0 — never block Claude Code on hook failure.
+      process.exit(0);
+    }
+  };
+}
+
 export function registerHookCommands(program: Command): void {
   const hook = program
     .command("hook")
     .description("Claude Code hook handlers (internal)")
     .helpOption(false);
 
+  // Top-level safety net: any uncaught exception or unhandled rejection
+  // in the hook process should never propagate to Claude Code as a
+  // "Stop hook error". Print and exit 0.
+  process.on("uncaughtException", (err: Error) => {
+    const msg = err.message ?? String(err);
+    const code = (err as NodeJS.ErrnoException).code;
+    if (
+      code === "ERR_DLOPEN_FAILED" ||
+      msg.includes("NODE_MODULE_VERSION") ||
+      msg.includes("was compiled against a different Node")
+    ) {
+      process.stderr.write(
+        "[k6s hook] Native module ABI mismatch — run `npm rebuild -g better-sqlite3` or `k6s doctor`.\n",
+      );
+    } else {
+      process.stderr.write(`[k6s hook] uncaught: ${msg}\n`);
+    }
+    process.exit(0);
+  });
+  process.on("unhandledRejection", (reason: unknown) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    process.stderr.write(`[k6s hook] unhandled rejection: ${msg}\n`);
+    process.exit(0);
+  });
+
   // Plugin managers are intentionally not loaded in hook subprocesses.
   // Hooks must stay fast and stateless, so plugin-specific hooks fire only
   // from the main CLI process where the PluginManager is initialized.
 
-  hook.command("post-tool-use").action(async () => {
+  hook.command("post-tool-use").action(safeHookAction("post-tool-use", async () => {
     const projectRoot = resolveHookProjectRoot();
     if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
@@ -937,9 +1007,9 @@ export function registerHookCommands(program: Command): void {
       await shutdownLangfuse();
       await shutdownTelemetry();
     }
-  });
+  }));
 
-  hook.command("subagent-start").action(async () => {
+  hook.command("subagent-start").action(safeHookAction("subagent-start", async () => {
     const projectRoot = resolveHookProjectRoot();
     if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
@@ -1005,9 +1075,9 @@ export function registerHookCommands(program: Command): void {
       await shutdownLangfuse();
       await shutdownTelemetry();
     }
-  });
+  }));
 
-  hook.command("subagent-stop").action(async () => {
+  hook.command("subagent-stop").action(safeHookAction("subagent-stop", async () => {
     const projectRoot = resolveHookProjectRoot();
     if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
@@ -1073,9 +1143,9 @@ export function registerHookCommands(program: Command): void {
       await shutdownLangfuse();
       await shutdownTelemetry();
     }
-  });
+  }));
 
-  hook.command("session-stop").action(() => {
+  hook.command("session-stop").action(safeHookAction("session-stop", () => {
     const projectRoot = resolveHookProjectRoot();
     if (!projectRoot) return;
     const sessionId = getSessionId(projectRoot);
@@ -1149,5 +1219,5 @@ export function registerHookCommands(program: Command): void {
     // Remove daemon state.
     const daemonState = new DaemonState(path.join(projectRoot, ".khoregos"));
     daemonState.removeState();
-  });
+  }));
 }
