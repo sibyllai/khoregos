@@ -287,11 +287,19 @@ export function registerTeamCommands(program: Command): void {
   team
     .command("start")
     .description("Start an agent team session with governance")
-    .argument("<objective>", "What the team will work on")
+    .argument("[objective]", "What the team will work on (optional — defaults to git branch)")
     .option("-r, --run", "Launch Claude Code with the objective as prompt")
     .option("-d, --dashboard", "Launch the real-time audit dashboard")
-    .action(async (objective: string, opts: { run?: boolean; dashboard?: boolean }) => {
+    .action(async (objectiveArg: string | undefined, opts: { run?: boolean; dashboard?: boolean }) => {
       const projectRoot = process.cwd();
+      // Resolve objective: explicit arg wins, else git branch, else generic.
+      const git = getGitContext(projectRoot);
+      const hadExplicitObjective = typeof objectiveArg === "string" && objectiveArg.trim().length > 0;
+      const objective = hadExplicitObjective
+        ? objectiveArg!
+        : git.branch
+          ? `session on branch ${git.branch}`
+          : "ad-hoc session (no objective)";
       const configFile = path.join(projectRoot, "k6s.yaml");
       const khoregoDir = path.join(projectRoot, ".khoregos");
 
@@ -365,7 +373,6 @@ export function registerTeamCommands(program: Command): void {
         (typeof process.getuid === "function"
           ? String(process.getuid())
           : null);
-      const git = getGitContext(projectRoot);
       const claudeVersion = getClaudeCodeVersion();
 
       const session = withDb(projectRoot, (db) => {
@@ -535,17 +542,24 @@ export function registerTeamCommands(program: Command): void {
         console.log(chalk.bold("Launching Claude Code..."));
         console.log();
         try {
-          execFileSync("claude", [objective], { stdio: "inherit" });
+          // When no explicit objective was given, launch Claude with no
+          // initial prompt — the user will type their own.
+          const claudeArgs = hadExplicitObjective ? [objective] : [];
+          execFileSync("claude", claudeArgs, { stdio: "inherit" });
         } catch {
           console.error(chalk.red("Claude Code not found."));
           console.error("Make sure 'claude' is in your PATH.");
           process.exit(1);
         }
       } else {
-        const escaped = objectiveOneline.replace(/'/g, "'\\''");
         console.log(chalk.green("Session ready!") + " Now run:");
         console.log();
-        console.log(`  ${chalk.cyan.bold(`claude '${escaped}'`)}`);
+        if (hadExplicitObjective) {
+          const escaped = objectiveOneline.replace(/'/g, "'\\''");
+          console.log(`  ${chalk.cyan.bold(`claude '${escaped}'`)}`);
+        } else {
+          console.log(`  ${chalk.cyan.bold("claude")}`);
+        }
         console.log();
         console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
       }
