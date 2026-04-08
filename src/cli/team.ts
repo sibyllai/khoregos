@@ -282,15 +282,30 @@ export function startTelemetryDaemon(projectRoot: string): void {
 export function registerTeamCommands(program: Command): void {
   const team = program
     .command("team")
-    .description("Manage agent team sessions");
+    .description("Manage agent team sessions (legacy alias for k6s start/stop/resume/history)");
 
-  team
-    .command("start")
-    .description("Start an agent team session with governance")
-    .argument("[objective]", "What the team will work on (optional — defaults to git branch)")
-    .option("-r, --run", "Launch Claude Code with the objective as prompt")
-    .option("-d, --dashboard", "Launch the real-time audit dashboard")
-    .action(async (objectiveArg: string | undefined, opts: { run?: boolean; dashboard?: boolean }) => {
+  /**
+   * Register a subcommand under both `k6s team <name>` and the top-level
+   * `k6s <name>`. The configure callback is invoked with each Command
+   * instance and should set description, arguments, options, and action.
+   * The top-level form is the ergonomic shortcut; the `team` form remains
+   * for backward compatibility.
+   */
+  function registerBoth(
+    name: string,
+    configure: (cmd: Command) => void,
+    opts?: { topLevel?: boolean },
+  ): void {
+    configure(team.command(name));
+    if (opts?.topLevel !== false) {
+      configure(program.command(name));
+    }
+  }
+
+  const startAction = async (
+    objectiveArg: string | undefined,
+    opts: { run?: boolean; dashboard?: boolean },
+  ): Promise<void> => {
       const projectRoot = process.cwd();
       // Resolve objective: explicit arg wins, else git branch, else generic.
       const git = getGitContext(projectRoot);
@@ -315,7 +330,7 @@ export function registerTeamCommands(program: Command): void {
         console.log(chalk.yellow(`Session ${sid}... is already active.`));
         console.log();
         console.log("Continue working with: " + chalk.cyan.bold("claude"));
-        console.log("Or stop first with:    " + chalk.bold("k6s team stop"));
+        console.log("Or stop first with:    " + chalk.bold("k6s stop"));
         process.exit(1);
       }
 
@@ -561,16 +576,22 @@ export function registerTeamCommands(program: Command): void {
           console.log(`  ${chalk.cyan.bold("claude")}`);
         }
         console.log();
-        console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
+        console.log("When done, run " + chalk.bold("k6s stop") + " to end the session.");
       }
       await shutdownLangfuse();
       await shutdownTelemetry();
-    });
+    };
 
-  team
-    .command("stop")
-    .description("Stop the current agent team session")
-    .action(async () => {
+  registerBoth("start", (cmd) => {
+    cmd
+      .description("Start an agent team session with governance")
+      .argument("[objective]", "What the team will work on (optional — defaults to git branch)")
+      .option("-r, --run", "Launch Claude Code with the objective as prompt")
+      .option("-d, --dashboard", "Launch the real-time audit dashboard")
+      .action(startAction);
+  });
+
+  const stopAction = async (): Promise<void> => {
       const projectRoot = process.cwd();
       const khoregoDir = path.join(projectRoot, ".khoregos");
       const configFile = path.join(projectRoot, "k6s.yaml");
@@ -663,13 +684,13 @@ export function registerTeamCommands(program: Command): void {
 
       console.log(chalk.green("✓") + ` Session ${sessionId.slice(0, 8)}... stopped`);
       console.log(chalk.green("✓") + " Governance removed (CLAUDE.md, hooks)");
-    });
+    };
 
-  team
-    .command("resume")
-    .description("Resume a previous session")
-    .argument("[session-id]", "Session ID to resume (defaults to latest)")
-    .action(async (sessionId?: string) => {
+  registerBoth("stop", (cmd) => {
+    cmd.description("Stop the current agent team session").action(stopAction);
+  });
+
+  const resumeAction = async (sessionId?: string): Promise<void> => {
       const projectRoot = process.cwd();
       const configFile = path.join(projectRoot, "k6s.yaml");
       const khoregoDir = path.join(projectRoot, ".khoregos");
@@ -686,7 +707,7 @@ export function registerTeamCommands(program: Command): void {
         console.log(chalk.yellow(`Session ${sid}... is already active.`));
         console.log();
         console.log("Continue working with: " + chalk.cyan.bold("claude"));
-        console.log("Or stop first with:    " + chalk.bold("k6s team stop"));
+        console.log("Or stop first with:    " + chalk.bold("k6s stop"));
         process.exit(1);
       }
 
@@ -858,16 +879,19 @@ export function registerTeamCommands(program: Command): void {
       console.log();
       console.log("  " + chalk.cyan.bold("claude"));
       console.log();
-      console.log("When done, run " + chalk.bold("k6s team stop") + " to end the session.");
+      console.log("When done, run " + chalk.bold("k6s stop") + " to end the session.");
       await shutdownLangfuse();
       await shutdownTelemetry();
-    });
+    };
 
-  team
-    .command("status")
-    .description("Show current team session status")
-    .option("--json", "Output in JSON format")
-    .action((opts: { json?: boolean }, command: Command) => {
+  registerBoth("resume", (cmd) => {
+    cmd
+      .description("Resume a previous session")
+      .argument("[session-id]", "Session ID to resume (defaults to latest)")
+      .action(resumeAction);
+  });
+
+  const statusAction = (opts: { json?: boolean }, command: Command): void => {
       const json = resolveJsonOption(opts, command);
       const projectRoot = process.cwd();
       const khoregoDir = path.join(projectRoot, ".khoregos");
@@ -947,14 +971,25 @@ export function registerTeamCommands(program: Command): void {
           }
         }
       });
-    });
+    };
 
-  team
-    .command("history")
-    .description("List past sessions")
-    .option("-n, --limit <number>", "Number of sessions to show", "10")
-    .option("--json", "Output in JSON format")
-    .action((opts: { limit: string; json?: boolean }, command: Command) => {
+  // Skip top-level alias for `status` — there's already a `k6s status`
+  // command in index.ts that serves the broader project status view.
+  registerBoth(
+    "status",
+    (cmd) => {
+      cmd
+        .description("Show current team session status")
+        .option("--json", "Output in JSON format")
+        .action(statusAction);
+    },
+    { topLevel: false },
+  );
+
+  const historyAction = (
+    opts: { limit: string; json?: boolean },
+    command: Command,
+  ): void => {
       const json = resolveJsonOption(opts, command);
       const projectRoot = process.cwd();
       const khoregoDir = path.join(projectRoot, ".khoregos");
@@ -1031,5 +1066,13 @@ export function registerTeamCommands(program: Command): void {
       }
 
       console.log(table.toString());
-    });
+    };
+
+  registerBoth("history", (cmd) => {
+    cmd
+      .description("List past sessions")
+      .option("-n, --limit <number>", "Number of sessions to show", "10")
+      .option("--json", "Output in JSON format")
+      .action(historyAction);
+  });
 }

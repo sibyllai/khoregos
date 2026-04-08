@@ -46,7 +46,7 @@ export function registerDashboardCommands(program: Command): void {
         console.error(
           chalk.red("No database found.") +
             " Run " +
-            chalk.bold("k6s team start") +
+            chalk.bold("k6s start") +
             " first.",
         );
         process.exit(1);

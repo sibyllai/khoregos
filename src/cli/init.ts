@@ -240,7 +240,7 @@ export function registerInitCommand(program: Command): void {
         console.log('Next steps:');
         console.log('  1. Edit k6s.yaml to configure boundaries and audit rules');
         console.log(
-          `  2. Run ${chalk.bold('k6s team start "your objective"')} to begin a session`,
+          `  2. Run ${chalk.bold('k6s start "your objective"')} to begin a session`,
         );
       },
     );

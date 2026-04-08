@@ -187,7 +187,7 @@ function checkStaleness(projectRoot: string, sessionId: string): void {
       if (ageHours <= staleHours) return;
 
       process.stderr.write(
-        `[k6s] Warning: session ${sessionId.slice(0, 8)}... is ${Math.round(ageHours)}h old. Run \`k6s team stop\` then \`k6s team start\` to start fresh.\n`,
+        `[k6s] Warning: session ${sessionId.slice(0, 8)}... is ${Math.round(ageHours)}h old. Run \`k6s stop\` then \`k6s start\` to start fresh.\n`,
       );
       daemon.writeState({ ...state, stale_warned_at: Date.now() });
     } finally {
@@ -286,7 +286,7 @@ function autoCreateSession(projectRoot: string): string | null {
           warnLogger.stop();
           // Log to stderr so the user sees it in their terminal.
           process.stderr.write(
-            `[k6s] Warning: session ${existing.id.slice(0, 8)}... is ${Math.round(sessionAgeHours)}h old. Run \`k6s team stop\` then \`k6s team start\` to start fresh.\n`,
+            `[k6s] Warning: session ${existing.id.slice(0, 8)}... is ${Math.round(sessionAgeHours)}h old. Run \`k6s stop\` then \`k6s start\` to start fresh.\n`,
           );
         }
       }
